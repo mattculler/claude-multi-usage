@@ -46,15 +46,15 @@ docker run -d -p 8000:8000 -v cmu-data:/data ghcr.io/hunknownn/claude-multi-usag
 
 **Kubernetes**
 ```bash
-kubectl apply -k deploy/k8s/ -n cmu-server
+kubectl create namespace cmu-server
+kubectl apply -k https://github.com/hunknownn/claude-multi-usage/deploy/k8s/ -n cmu-server
 ```
 
-To expose via Ingress, copy and customize the example:
+To expose via Ingress (optional):
 ```bash
-cp deploy/k8s/ingress.example.yaml deploy/k8s/ingress.yaml
-# Edit ingress.yaml — replace your-domain.example.com with your domain
-# Uncomment the ingress line in deploy/k8s/kustomization.yaml
-kubectl apply -k deploy/k8s/ -n cmu-server
+curl -O https://raw.githubusercontent.com/hunknownn/claude-multi-usage/main/deploy/k8s/ingress.example.yaml
+# Edit the file — replace your-domain.example.com with your domain
+kubectl apply -f ingress.example.yaml -n cmu-server
 ```
 
 **pip**
@@ -68,7 +68,7 @@ cmu server start --host 0.0.0.0 --port 8000
 ```bash
 # Set server URL and email (once per device)
 cmu config --server https://your-server.com
-cmu config --email donghun@example.com
+cmu config --email your@email.com
 
 # Sync usage data
 cmu sync
