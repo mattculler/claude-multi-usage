@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cmu-server
+  labels:
+    app: cmu-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cmu-server
+  template:
+    metadata:
+      labels:
+        app: cmu-server
+    spec:
+      containers:
+        - name: cmu-server
+          image: ghcr.io/hunknownn/claude-multi-usage:latest
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: cmu-server-data

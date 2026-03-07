@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .models import SyncPayload, DeviceInfo
 
-DEFAULT_DB_PATH = Path.home() / ".claude-multi-usage" / "server.db"
+DEFAULT_DB_PATH = Path("/data") / "server.db"
 
 
 class Store:
