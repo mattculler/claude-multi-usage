@@ -115,8 +115,20 @@ jobs:
           FILE_SHA=$(echo "$FORMULA_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin)['sha'])")
           CONTENT=$(echo "$FORMULA_RESP" | python3 -c "import json,sys,base64; print(base64.b64decode(json.load(sys.stdin)['content']).decode())")
 
-          # Update url and sha256
-          UPDATED=$(echo "$CONTENT" | sed "s|url \"https://files.pythonhosted.org/.*\"|url \"$NEW_URL\"|" | sed "0,/sha256 \".*\"/{s|sha256 \".*\"|sha256 \"$NEW_SHA\"|}")
+          # Update only the main package url and sha256 (not dependency resources)
+          UPDATED=$(python3 << PYEOF
+import re
+content = """$CONTENT"""
+# Replace only first url and sha256 (before any resource block)
+content = re.sub(
+    r'(homepage.*?\n\s+)url "https://files\.pythonhosted\.org/[^"]*"(\n\s+)sha256 "[a-f0-9]+"',
+    r'\1url "$NEW_URL"\2sha256 "$NEW_SHA"',
+    content, count=1, flags=re.DOTALL
+)
+print(content)
+PYEOF
+          )
+          UPDATED=$(echo "$UPDATED" | sed "s|\$NEW_URL|$NEW_URL|" | sed "s|\$NEW_SHA|$NEW_SHA|")
           ENCODED=$(echo "$UPDATED" | base64 -w 0)
 
           # Push update
