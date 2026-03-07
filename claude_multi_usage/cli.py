@@ -502,11 +502,11 @@ def config():
 
     \b
     Examples:
-      cmu config --server https://your-server.com
-      cmu config --key add my-key "description"
-      cmu config --key remove my-key
-      cmu config --key list
-      cmu config --show
+      cmu config server https://your-server.com
+      cmu config key add my-key "description"
+      cmu config key remove my-key
+      cmu config key list
+      cmu config show
     """
     pass
 
