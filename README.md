@@ -46,7 +46,15 @@ docker run -d -p 8000:8000 -v cmu-data:/data ghcr.io/hunknownn/claude-multi-usag
 
 **Kubernetes**
 ```bash
-kubectl apply -f deploy/k8s/
+kubectl apply -k deploy/k8s/ -n cmu-server
+```
+
+To expose via Ingress, copy and customize the example:
+```bash
+cp deploy/k8s/ingress.example.yaml deploy/k8s/ingress.yaml
+# Edit ingress.yaml — replace your-domain.example.com with your domain
+# Uncomment the ingress line in deploy/k8s/kustomization.yaml
+kubectl apply -k deploy/k8s/ -n cmu-server
 ```
 
 **pip**
