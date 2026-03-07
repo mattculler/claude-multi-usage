@@ -47,8 +47,10 @@ class ModelUsage:
 class ProjectSummary:
     name: str
     session_count: int
-    first_seen: datetime | None = None
-    last_seen: datetime | None = None
+    output_tokens: int = 0
+    input_tokens: int = 0
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
 
 
 @dataclass
@@ -94,7 +96,33 @@ def _deduplicate_project_name(name: str) -> str:
     return name
 
 
-def parse_projects() -> list[ProjectSummary]:
+def _parse_session_tokens(session_file: Path) -> tuple:
+    """Parse a session jsonl file and return (output_tokens, input_tokens, timestamps)."""
+    output_tokens = 0
+    input_tokens = 0
+    timestamps = []
+    try:
+        with open(session_file) as f:
+            for line in f:
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if d.get("type") == "assistant":
+                    usage = d.get("message", {}).get("usage", {})
+                    output_tokens += usage.get("output_tokens", 0)
+                    input_tokens += usage.get("input_tokens", 0)
+                    input_tokens += usage.get("cache_read_input_tokens", 0)
+                    input_tokens += usage.get("cache_creation_input_tokens", 0)
+                ts = d.get("timestamp")
+                if ts:
+                    timestamps.append(ts)
+    except (OSError, IOError):
+        pass
+    return output_tokens, input_tokens, timestamps
+
+
+def parse_projects(with_tokens: bool = True) -> list:
     """Parse project directories to get project summaries."""
     if not PROJECTS_DIR.exists():
         return []
@@ -105,16 +133,10 @@ def parse_projects() -> list[ProjectSummary]:
             continue
 
         raw_name = project_dir.name
-        # 경로 형식: -Users-gimdonghun-workspace-project-subdir
-        # "workspace" 이후 부분을 추출하고 중복 제거
         parts = raw_name.split("-")
         try:
             ws_idx = parts.index("workspace")
             path_parts = "-".join(parts[ws_idx + 1:]) if ws_idx + 1 < len(parts) else raw_name
-            # 경로 구분자로 분리 후 중복 제거 (e.g., "apr-backend-assignment-apr-backend-assignment")
-            # 실제 디렉토리 구조 기반으로 의미 있는 이름 추출
-            segments = path_parts.split("-")
-            # 연속된 동일 패턴 제거
             project_name = _deduplicate_project_name(path_parts)
         except ValueError:
             project_name = raw_name
@@ -122,20 +144,35 @@ def parse_projects() -> list[ProjectSummary]:
         if not project_name or project_name.startswith("-Users"):
             project_name = raw_name.rsplit("-", 1)[-1] or "home"
 
-        # "url-jarvis/-docs" → "url-jarvis-docs"
         project_name = project_name.replace("/-", "-")
 
         if not project_name:
             continue
 
-        # 세션 파일(.jsonl) 개수 = 세션 수
         session_files = list(project_dir.glob("*.jsonl"))
         session_count = len(session_files)
 
-        # 첫/마지막 세션 시간 (파일 수정시간 기준)
+        total_output = 0
+        total_input = 0
+        all_timestamps = []
+
+        if with_tokens:
+            for sf in session_files:
+                out_t, in_t, ts_list = _parse_session_tokens(sf)
+                total_output += out_t
+                total_input += in_t
+                all_timestamps.extend(ts_list)
+
         first_seen = None
         last_seen = None
-        if session_files:
+        if all_timestamps:
+            all_timestamps.sort()
+            try:
+                first_seen = datetime.fromisoformat(all_timestamps[0].replace("Z", "+00:00"))
+                last_seen = datetime.fromisoformat(all_timestamps[-1].replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
+        elif session_files:
             mtimes = [f.stat().st_mtime for f in session_files]
             first_seen = datetime.fromtimestamp(min(mtimes))
             last_seen = datetime.fromtimestamp(max(mtimes))
@@ -143,11 +180,78 @@ def parse_projects() -> list[ProjectSummary]:
         projects.append(ProjectSummary(
             name=project_name,
             session_count=session_count,
+            output_tokens=total_output,
+            input_tokens=total_input,
             first_seen=first_seen,
             last_seen=last_seen,
         ))
 
-    return sorted(projects, key=lambda p: p.session_count, reverse=True)
+    return sorted(projects, key=lambda p: p.output_tokens, reverse=True)
+
+
+def parse_today_usage() -> Optional[DailyActivity]:
+    """Calculate today's usage by scanning recent session files."""
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    message_count = 0
+    session_count = 0
+    tool_call_count = 0
+    today_tokens: dict = {}
+
+    if not PROJECTS_DIR.exists():
+        return None
+
+    for project_dir in PROJECTS_DIR.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for session_file in project_dir.glob("*.jsonl"):
+            # 오늘 수정된 파일만 검사
+            if datetime.fromtimestamp(session_file.stat().st_mtime).strftime("%Y-%m-%d") != today_str:
+                continue
+            session_has_today = False
+            try:
+                with open(session_file) as f:
+                    for line in f:
+                        try:
+                            d = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        ts = d.get("timestamp", "")
+                        if not ts.startswith(today_str):
+                            continue
+                        msg_type = d.get("type")
+                        if msg_type == "user":
+                            message_count += 1
+                            session_has_today = True
+                        elif msg_type == "assistant":
+                            message_count += 1
+                            usage = d.get("message", {}).get("usage", {})
+                            out = usage.get("output_tokens", 0)
+                            model = d.get("message", {}).get("model", "unknown")
+                            today_tokens[model] = today_tokens.get(model, 0) + out
+                            # tool_use 블록 카운트
+                            content = d.get("message", {}).get("content", [])
+                            if isinstance(content, list):
+                                tool_call_count += sum(
+                                    1 for c in content
+                                    if isinstance(c, dict) and c.get("type") == "tool_use"
+                                )
+            except (OSError, IOError):
+                continue
+            if session_has_today:
+                session_count += 1
+
+    if message_count == 0:
+        return None
+
+    return DailyActivity(
+        date=today_str,
+        message_count=message_count,
+        session_count=session_count,
+        tool_call_count=tool_call_count,
+    ), DailyModelTokens(
+        date=today_str,
+        tokens_by_model=today_tokens,
+    )
 
 
 def load_usage_data() -> UsageData:

@@ -40,53 +40,62 @@ def make_summary_panel(data: UsageData) -> Panel:
     return Panel(table, title="Summary", border_style="blue")
 
 
-def make_daily_chart(data: UsageData, days: int = 14) -> Panel:
+def make_daily_chart(data: UsageData, days: int = 14,
+                     date_from: str = None, date_to: str = None) -> Panel:
     """Daily usage bar chart for recent days."""
-    activities = data.daily_activity[-days:]
-    if not activities:
-        return Panel("No data", title="Daily Usage")
+    act_map = {a.date: a for a in data.daily_activity}
+    token_map = {dt.date: dt.total_tokens for dt in data.daily_model_tokens}
 
-    max_tokens = 1
-    token_map: dict[str, int] = {}
-    for dt in data.daily_model_tokens:
-        token_map[dt.date] = dt.total_tokens
+    # 날짜 범위 결정
+    if date_from and date_to:
+        start = datetime.strptime(date_from, "%Y-%m-%d")
+        end = datetime.strptime(date_to, "%Y-%m-%d")
+        title = f"Daily Tokens ({date_from} ~ {date_to})"
+    elif date_from:
+        start = datetime.strptime(date_from, "%Y-%m-%d")
+        end = datetime.now()
+        title = f"Daily Tokens ({date_from} ~ now)"
+    elif date_to:
+        end = datetime.strptime(date_to, "%Y-%m-%d")
+        start = end - timedelta(days=days - 1)
+        title = f"Daily Tokens (~ {date_to})"
+    else:
+        if not data.daily_activity:
+            return Panel("No data", title="Daily Usage")
+        end = datetime.strptime(data.daily_activity[-1].date, "%Y-%m-%d")
+        start = end - timedelta(days=days - 1)
+        title = f"Daily Tokens (last {days} days)"
 
     # 날짜 범위를 채워서 빈 날도 표시
-    all_dates: list[tuple[str, int, int, int]] = []
-    if activities:
-        start = datetime.strptime(activities[0].date, "%Y-%m-%d")
-        end = datetime.strptime(activities[-1].date, "%Y-%m-%d")
-        act_map = {a.date: a for a in activities}
-
-        current = start
-        while current <= end:
-            d = current.strftime("%Y-%m-%d")
-            a = act_map.get(d)
-            tokens = token_map.get(d, 0)
-            msgs = a.message_count if a else 0
-            sessions = a.session_count if a else 0
-            all_dates.append((d, tokens, msgs, sessions))
-            if tokens > max_tokens:
-                max_tokens = tokens
-            current += timedelta(days=1)
-
-    # 최근 N일만
-    all_dates = all_dates[-days:]
+    all_dates = []
+    max_tokens = 1
+    current = start
+    while current <= end:
+        d = current.strftime("%Y-%m-%d")
+        a = act_map.get(d)
+        tokens = token_map.get(d, 0)
+        msgs = a.message_count if a else 0
+        sessions = a.session_count if a else 0
+        all_dates.append((d, tokens, msgs, sessions))
+        if tokens > max_tokens:
+            max_tokens = tokens
+        current += timedelta(days=1)
 
     bar_width = 30
     lines = []
     for date_str, tokens, msgs, sessions in all_dates:
         short_date = date_str[5:]  # MM-DD
         filled = int((tokens / max_tokens) * bar_width) if max_tokens > 0 else 0
-        bar = "█" * filled + "░" * (bar_width - filled)
+        bar = "\u2588" * filled + "\u2591" * (bar_width - filled)
 
         if tokens > 0:
             line = f"  {short_date}  {bar}  {format_tokens(tokens):>6}  ({msgs} msgs, {sessions} sess)"
         else:
-            line = f"  {short_date}  {'░' * bar_width}  {'':>6}"
+            empty_bar = "\u2591" * bar_width
+            line = f"  {short_date}  {empty_bar}"
         lines.append(line)
 
-    return Panel("\n".join(lines), title=f"Daily Tokens (last {days} days)", border_style="green")
+    return Panel("\n".join(lines), title=title, border_style="green")
 
 
 def make_hourly_heatmap(data: UsageData) -> Panel:
@@ -126,16 +135,18 @@ def make_hourly_heatmap(data: UsageData) -> Panel:
 
 
 def make_projects_table(data: UsageData, limit: int = 10) -> Panel:
-    """Top projects by session count."""
+    """Top projects by token usage."""
     table = Table(box=None, padding=(0, 1))
     table.add_column("#", style="dim", width=3)
     table.add_column("Project", style="bold")
     table.add_column("Sessions", justify="right", style="cyan")
+    table.add_column("Output Tokens", justify="right", style="green")
     table.add_column("Last Used", style="dim")
 
     for i, project in enumerate(data.projects[:limit], 1):
         last = project.last_seen.strftime("%Y-%m-%d") if project.last_seen else "-"
-        table.add_row(str(i), project.name, str(project.session_count), last)
+        tokens_str = format_tokens(project.output_tokens) if project.output_tokens > 0 else "-"
+        table.add_row(str(i), project.name, str(project.session_count), tokens_str, last)
 
     return Panel(table, title=f"Top Projects (total {len(data.projects)})", border_style="magenta")
 
@@ -161,7 +172,8 @@ def make_models_table(data: UsageData) -> Panel:
     return Panel(table, title="Model Usage", border_style="red")
 
 
-def render_dashboard(data: UsageData, days: int = 14) -> None:
+def render_dashboard(data: UsageData, days: int = 14,
+                     date_from: str = None, date_to: str = None) -> None:
     """Render the full dashboard."""
     console = Console()
 
@@ -176,7 +188,7 @@ def render_dashboard(data: UsageData, days: int = 14) -> None:
     console.print()
 
     # Daily chart
-    console.print(make_daily_chart(data, days=days))
+    console.print(make_daily_chart(data, days=days, date_from=date_from, date_to=date_to))
     console.print()
 
     # Hourly heatmap
