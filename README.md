@@ -6,11 +6,16 @@ Parses local `~/.claude` data and displays usage stats in your terminal — sess
 
 ## Install
 
+**Homebrew (macOS)**
+```bash
+brew tap hunknownn/tap
+brew install claude-multi-usage
+```
+
+**pipx**
 ```bash
 pipx install claude-multi-usage
 ```
-
-> Requires [pipx](https://pipx.pypa.io/). Install with `brew install pipx` (macOS) or `pip install pipx`.
 
 ## Usage
 
