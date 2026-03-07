@@ -19,11 +19,13 @@ def main(ctx):
 
     \b
     Quick start:
-      cmu               Show full dashboard (default)
-      cmu today          Today's realtime usage
-      cmu projects       Project breakdown with token usage
-      cmu models         Model usage breakdown
-      cmu dashboard -d 30          Last 30 days
+      cmu                        Full dashboard (last 14 days)
+      cmu today                  Today's realtime usage
+      cmu projects               Project breakdown with token usage
+      cmu projects -n 5          Top 5 projects only
+      cmu models                 Model usage breakdown
+      cmu dashboard -d 7         Last 7 days
+      cmu dashboard -d 30        Last 30 days
       cmu dashboard --from 2026-03-01 --to 2026-03-07    Date range
 
     \b
@@ -47,10 +49,13 @@ def dashboard(days: int, date_from: str, date_to: str):
 
     \b
     Examples:
-      cmu dashboard                          Last 14 days (default)
-      cmu dashboard -d 30                    Last 30 days
-      cmu dashboard --from 2026-02-01        From date to now
-      cmu dashboard --from 2026-02-01 --to 2026-02-28    Specific range
+      cmu dashboard                 Last 14 days (default)
+      cmu dashboard -d 7            Last 7 days
+      cmu dashboard -d 30           Last 30 days
+      cmu dashboard -d 90           Last 3 months
+      cmu dashboard --from 2026-02-01                     From date to now
+      cmu dashboard --from 2026-02-01 --to 2026-02-28     Specific range
+      cmu dashboard --to 2026-02-28                       14 days ending at date
 
     \b
     Includes: summary, model usage, daily token chart,
