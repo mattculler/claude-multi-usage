@@ -22,6 +22,7 @@ pipx install claude-multi-usage
 ```bash
 cmu                    # Full dashboard (last 14 days)
 cmu today              # Today's realtime usage
+cmu hourly             # Today's hourly breakdown (tokens/msgs per hour)
 cmu projects           # Usage by project (sorted by output tokens)
 cmu projects -n 5      # Top 5 projects only
 cmu models             # Usage by model
@@ -125,6 +126,15 @@ cc() {
 │  03-03  ███████░░░░░░░░░░░░░   96.6K  (633 msgs, 4 sess)    │
 ╰──────────────────────────────────────────────────────────────╯
 
+╭──────────────── Today Hourly Usage (2026-03-07) ───────────────╮
+│    06:00  █████████░░░░░░░░░░░░░   31.5K  (304 msgs, 4 sess)  │
+│    07:00  ██████████████████████   79.4K  (707 msgs, 2 sess)  │
+│    09:00  ██████████████████████   81.0K  (776 msgs, 7 sess)  │
+│  * 13:00  █████████████████████████ 87.2K (676 msgs, 7 sess)  │
+│                                                                │
+│    Total   398.0K tokens, 3789 messages                        │
+╰────────────────────────────────────────────────────────────────╯
+
 ╭──────────────── Hourly Sessions (all time) ──────────────────╮
 │  00 01 02 .. 09 10 .. 16 17 18 19 20 21 22 23               │
 │  ▒▒ ░░ ░░    ░░ ▒▒    ▓▓ ▒▒ ░░ ▒▒ ▓▓ ▓▓ ██ ▓▓               │
@@ -152,6 +162,11 @@ cc() {
 ╭──── Daily Tokens (last 14 days) ────╮
 │  03-03  ████████████████████  96.6K │
 ╰─────────────────────────────────────╯
+╭──── Today Hourly Usage ────────────────────────────╮
+│    09:00  ██████████████  81.0K  (776 msgs, 7 sess) │
+│  * 13:00  ████████████████ 87.2K (676 msgs, 7 sess) │
+│    Total  398.0K tokens, 3789 messages               │
+╰──────────────────────────────────────────────────────╯
 ╭──── Top Projects ───╮
 │  ...                 │
 ╰──────────────────────╯
@@ -162,10 +177,11 @@ cc() {
 │  ...            │  │  ...                │
 ╰─────────────────╯  ╰────────────────────╯
 ╭──── Daily Tokens ───╮
+╭──── Today Hourly Usage ───╮
 ╭──── Top Projects ───╮
 ```
 
-> Devices with an alias show as `alias (hostname)`. Devices without an alias show hostname only. Hourly heatmap is omitted in diff view (cumulative data is not synced).
+> Devices with an alias show as `alias (hostname)`. Devices without an alias show hostname only. Today's hourly usage is shown per device when available via `cmu sync`.
 
 ## Cost Estimation
 
@@ -204,6 +220,7 @@ No API keys required. Local data stays local unless you opt in to sync.
 - [x] Accurate cost estimation with incremental caching ([#5](https://github.com/hunknownn/claude-multi-usage/issues/5))
 - [x] Key-based device grouping with alias support ([#8](https://github.com/hunknownn/claude-multi-usage/issues/8), [#11](https://github.com/hunknownn/claude-multi-usage/issues/11))
 - [x] `cmu diff` — multi-device per-device/merged view ([#11](https://github.com/hunknownn/claude-multi-usage/issues/11))
+- [x] `cmu hourly` — today's per-hour usage breakdown with sync support
 - [x] Homebrew support
 - [ ] Web dashboard ([#3](https://github.com/hunknownn/claude-multi-usage/issues/3))
 
