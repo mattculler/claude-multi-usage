@@ -4,8 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claude-multi-usage"
-version = "0.1.1"
+version = "0.1.2"
 description = "Claude Code usage dashboard across multiple devices"
+readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 authors = [
