@@ -116,18 +116,18 @@ jobs:
           CONTENT=$(echo "$FORMULA_RESP" | python3 -c "import json,sys,base64; print(base64.b64decode(json.load(sys.stdin)['content']).decode())")
 
           # Update only the main package url and sha256 (not dependency resources)
-          UPDATED=$(echo "$CONTENT" | python3 -c "
-import re, sys
-content = sys.stdin.read()
-new_url = '$NEW_URL'
-new_sha = '$NEW_SHA'
-content = re.sub(
-    r'(homepage.*?\n\s+)url \"https://files\.pythonhosted\.org/[^\"]*\"(\n\s+)sha256 \"[a-f0-9]+\"',
-    r'\1url \"' + new_url + r'\"\2sha256 \"' + new_sha + r'\"',
-    content, count=1, flags=re.DOTALL
-)
-print(content)
-")
+          UPDATED=$(echo "$CONTENT" | NEW_URL="$NEW_URL" NEW_SHA="$NEW_SHA" python3 -c "
+          import re, sys, os
+          content = sys.stdin.read()
+          new_url = os.environ['NEW_URL']
+          new_sha = os.environ['NEW_SHA']
+          content = re.sub(
+              r'(homepage.*?\n\s+)url \"https://files\.pythonhosted\.org/[^\"]*\"(\n\s+)sha256 \"[a-f0-9]+\"',
+              r'\1url \"' + new_url + r'\"\2sha256 \"' + new_sha + r'\"',
+              content, count=1, flags=re.DOTALL
+          )
+          print(content)
+          ")
           ENCODED=$(echo "$UPDATED" | base64 -w 0)
 
           # Push update
