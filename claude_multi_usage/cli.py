@@ -308,17 +308,22 @@ def cost():
     today is calculated in realtime.
 
     \b
-    Uses Anthropic API pricing per model:
-      opus:   $15/M input, $75/M output
-      sonnet: $3/M input, $15/M output
-      haiku:  $0.80/M input, $4/M output
+    Pricing is fetched from LiteLLM's pricing DB and cached locally.
+    Falls back to last cached pricing if network is unavailable.
     """
     from collections import defaultdict
     from rich.table import Table
     from rich.panel import Panel
 
     console = Console()
-    daily_costs, total_cost, today_cost = get_costs()
+    costs = get_costs()
+    if costs is None:
+        console.print()
+        console.print("[bold red]Pricing data unavailable.[/bold red]")
+        console.print("[dim]Run with network access to fetch pricing from LiteLLM.[/dim]")
+        console.print()
+        return
+    daily_costs, total_cost, today_cost = costs
 
     # 월별 집계
     monthly = defaultdict(lambda: defaultdict(float))

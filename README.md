@@ -108,19 +108,24 @@ cc() {
 
 ## Cost Estimation
 
-Calculates estimated API costs based on Anthropic pricing. Past days are cached for instant loading, today is calculated in realtime.
+Calculates estimated API costs using [LiteLLM's pricing DB](https://github.com/BerriAI/litellm) (2,600+ models). Pricing is auto-fetched and cached locally for 24 hours.
+
+- Supports tiered pricing (200K+ token extended context)
+- Subagent (haiku) usage included
+- Deduplicates streaming message blocks
+- Falls back to last cached pricing when offline
 
 ```
 ╭──────────── Cost Breakdown (by month) ────────────╮
 │  Month    Model                   Cost             │
-│  2026-02  claude-opus-4-6    $1,317.20             │
-│           claude-sonnet-4-5    $126.54             │
-│           subtotal           $1,443.74             │
+│  2026-02  claude-opus-4-6      $236.27             │
+│           claude-sonnet-4-5     $50.66             │
+│           subtotal             $286.93             │
 │                                                    │
-│  2026-03  claude-opus-4-6      $104.56             │
-│           subtotal             $104.56             │
+│  2026-03  claude-opus-4-6       $30.21             │
+│           subtotal              $30.21             │
 │                                                    │
-│  Total                       $1,548.29             │
+│  Total                         $317.14             │
 ╰────────────────────────────────────────────────────╯
 ```
 
@@ -128,7 +133,7 @@ Calculates estimated API costs based on Anthropic pricing. Past days are cached 
 
 Reads local Claude Code data from `~/.claude/`:
 - `stats-cache.json` — daily activity, model tokens, hourly counts
-- `projects/` — session files per project
+- `projects/**/*.jsonl` — session files per project (including subagents)
 
 No API keys required. Local data stays local unless you opt in to sync.
 

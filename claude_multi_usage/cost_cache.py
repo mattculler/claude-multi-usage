@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from .pricing import calculate_model_cost
+from .pricing import calculate_model_cost, get_pricing
 
 CACHE_DIR = Path.home() / ".claude-multi-usage"
 CACHE_FILE = CACHE_DIR / "cost-cache.json"
@@ -28,10 +28,12 @@ def _parse_sessions_for_date_range(start_date: str, end_date: str):
     if not CLAUDE_PROJECTS_DIR.exists():
         return daily_costs
 
+    seen_msg_ids = set()
+
     for project_dir in CLAUDE_PROJECTS_DIR.iterdir():
         if not project_dir.is_dir():
             continue
-        for session_file in project_dir.glob("*.jsonl"):
+        for session_file in project_dir.glob("**/*.jsonl"):
             try:
                 mtime = datetime.fromtimestamp(session_file.stat().st_mtime).strftime("%Y-%m-%d")
                 if mtime < start_date:
@@ -46,17 +48,42 @@ def _parse_sessions_for_date_range(start_date: str, end_date: str):
                             d = json.loads(line)
                         except json.JSONDecodeError:
                             continue
-                        if d.get("type") != "assistant":
+
+                        # assistant 타입: 직접 응답
+                        # progress 타입: 서브에이전트(haiku 등) 응답
+                        entry_type = d.get("type")
+                        if entry_type == "assistant":
+                            ts = d.get("timestamp", "")
+                            msg = d.get("message", {})
+                        elif entry_type == "progress":
+                            data = d.get("data", {})
+                            if not isinstance(data, dict):
+                                continue
+                            inner = data.get("message", {})
+                            if not isinstance(inner, dict):
+                                continue
+                            msg = inner.get("message", {})
+                            if not isinstance(msg, dict):
+                                continue
+                            ts = inner.get("timestamp", "")
+                        else:
                             continue
-                        ts = d.get("timestamp", "")
-                        date_str = ts[:10]
+
+                        date_str = ts[:10] if ts else ""
                         if not date_str or date_str < start_date or date_str > end_date:
                             continue
 
-                        msg = d.get("message", {})
                         model = msg.get("model", "")
                         if not model or "claude" not in model:
                             continue
+
+                        # 중복 메시지 제거 (같은 message ID는 한 번만 카운트)
+                        msg_id = msg.get("id", "")
+                        if msg_id:
+                            if msg_id in seen_msg_ids:
+                                continue
+                            seen_msg_ids.add(msg_id)
+
                         usage = msg.get("usage", {})
 
                         out = usage.get("output_tokens", 0)
@@ -96,11 +123,13 @@ def save_cost_cache(cache: dict) -> None:
         json.dump(cache, f, indent=2)
 
 
-def get_costs() -> tuple:
+def get_costs() -> Optional[tuple]:
     """Get accurate costs using incremental cache.
 
-    Returns (daily_costs_dict, total_cost, today_cost).
+    Returns (daily_costs_dict, total_cost, today_cost) or None if pricing unavailable.
     """
+    if get_pricing() is None:
+        return None
     cache = load_cost_cache()
     today_str = datetime.now().strftime("%Y-%m-%d")
     yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
