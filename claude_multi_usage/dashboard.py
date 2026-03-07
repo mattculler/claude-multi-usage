@@ -10,6 +10,7 @@ from rich.table import Table
 from rich.columns import Columns
 
 from .parser import UsageData
+from .pricing import calculate_model_cost, format_cost
 
 
 def format_tokens(n: int) -> str:
@@ -36,6 +37,13 @@ def make_summary_panel(data: UsageData) -> Panel:
 
     total_output = sum(m.output_tokens for m in data.model_usage)
     table.add_row("Total Output Tokens", format_tokens(total_output))
+
+    total_cost = sum(
+        calculate_model_cost(m.model, m.input_tokens, m.output_tokens,
+                             m.cache_read_tokens, m.cache_creation_tokens)
+        for m in data.model_usage
+    )
+    table.add_row("Estimated Cost", f"[bold yellow]{format_cost(total_cost)}[/bold yellow]")
 
     return Panel(table, title="Summary", border_style="blue")
 
@@ -158,15 +166,20 @@ def make_models_table(data: UsageData) -> Panel:
     table.add_column("Output", justify="right", style="cyan")
     table.add_column("Cache Read", justify="right", style="green")
     table.add_column("Cache Create", justify="right", style="yellow")
+    table.add_column("Cost", justify="right", style="bold yellow")
 
     for m in sorted(data.model_usage, key=lambda x: x.output_tokens, reverse=True):
-        # 모델명 짧게
         short_name = m.model.split("-202")[0] if "-202" in m.model else m.model
+        cost = calculate_model_cost(
+            m.model, m.input_tokens, m.output_tokens,
+            m.cache_read_tokens, m.cache_creation_tokens,
+        )
         table.add_row(
             short_name,
             format_tokens(m.output_tokens),
             format_tokens(m.cache_read_tokens),
             format_tokens(m.cache_creation_tokens),
+            format_cost(cost),
         )
 
     return Panel(table, title="Model Usage", border_style="red")
