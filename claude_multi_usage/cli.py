@@ -5,7 +5,7 @@ from __future__ import annotations
 import click
 
 from .parser import load_usage_data, parse_today_usage
-from .dashboard import render_dashboard, make_projects_table, make_models_table, Console, format_tokens
+from .dashboard import render_dashboard, render_multi_device_dashboard, make_projects_table, make_models_table, Console, format_tokens
 from .cost_cache import get_costs
 from .pricing import format_cost
 
@@ -13,48 +13,71 @@ from .pricing import format_cost
 CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
 
 
-def _fetch_all_usage():
-    """Fetch aggregated usage data from all devices via the sync server."""
-    import json
-    import urllib.request
-    import urllib.error
-    import urllib.parse
-    from .config import get_server_url, get_email
+def _build_device_usage_data(device: dict) -> "UsageData":
+    """Convert a single device dict (from server API) into UsageData."""
     from .parser import UsageData, DailyActivity, DailyModelTokens, ModelUsage, ProjectSummary
     from datetime import datetime
 
-    console = Console()
-    server_url = get_server_url()
+    def _parse_dt(s):
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return None
 
-    if not server_url:
-        console.print("[red]Server URL not configured.[/red]")
-        console.print("Run: cmu config --server <url>")
-        raise SystemExit(1)
+    return UsageData(
+        hostname=device["hostname"],
+        daily_activity=[
+            DailyActivity(
+                date=a["date"],
+                message_count=a["message_count"],
+                session_count=a["session_count"],
+                tool_call_count=a["tool_call_count"],
+            )
+            for a in device.get("daily_activity", [])
+        ],
+        daily_model_tokens=[
+            DailyModelTokens(date=t["date"], tokens_by_model=t["tokens_by_model"])
+            for t in device.get("daily_model_tokens", [])
+        ],
+        model_usage=[
+            ModelUsage(
+                model=m["model"],
+                input_tokens=m["input_tokens"],
+                output_tokens=m["output_tokens"],
+                cache_read_tokens=m["cache_read_tokens"],
+                cache_creation_tokens=m["cache_creation_tokens"],
+            )
+            for m in device.get("model_usage", [])
+        ],
+        projects=sorted([
+            ProjectSummary(
+                name=p["name"],
+                session_count=p["session_count"],
+                output_tokens=p.get("output_tokens", 0),
+                input_tokens=p.get("input_tokens", 0),
+                first_seen=_parse_dt(p.get("first_seen")),
+                last_seen=_parse_dt(p.get("last_seen")),
+            )
+            for p in device.get("projects", [])
+        ], key=lambda p: p.output_tokens, reverse=True),
+        hour_counts={int(k): v for k, v in device.get("hour_counts", {}).items()},
+        total_sessions=device.get("total_sessions", 0),
+        total_messages=device.get("total_messages", 0),
+        first_session_date=device.get("first_session_date"),
+    )
 
-    email = get_email()
-    if not email:
-        console.print("[red]Email not configured.[/red]")
-        console.print("Run: cmu config --email <your-email>")
-        raise SystemExit(1)
 
-    try:
-        params = urllib.parse.urlencode({"email": email})
-        req = urllib.request.Request(f"{server_url}/api/usage?{params}", headers={"User-Agent": "cmu"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            devices = json.loads(resp.read())
-    except urllib.error.URLError as e:
-        console.print(f"[red]Failed to fetch from server:[/red] {e}")
-        raise SystemExit(1)
+def _merge_devices_usage(devices: list[dict]) -> "UsageData":
+    """Merge all device dicts into a single aggregated UsageData."""
+    from .parser import UsageData, DailyActivity, DailyModelTokens, ModelUsage, ProjectSummary
+    from datetime import datetime
 
-    if not devices:
-        console.print("[dim]No device data on server.[/dim]")
-        raise SystemExit(0)
-
-    # 모든 기기 데이터를 합산
     all_activity: dict[str, DailyActivity] = {}
     all_tokens: dict[str, dict[str, int]] = {}
-    all_model_usage: dict[str, list[int]] = {}  # model -> [in, out, cache_read, cache_create]
-    all_projects: dict[str, list] = {}  # name -> [sessions, out, in, first, last]
+    all_model_usage: dict[str, list[int]] = {}
+    all_projects: dict[str, list] = {}
     all_hour_counts: dict[int, int] = {}
     total_sessions = 0
     total_messages = 0
@@ -159,6 +182,54 @@ def _fetch_all_usage():
     )
 
 
+def _fetch_all_devices(key: str | None = None) -> list[dict]:
+    """Fetch raw device data list from the sync server."""
+    import json
+    import urllib.request
+    import urllib.error
+    import urllib.parse
+    from .config import get_server_url, get_keys
+
+    console = Console()
+    server_url = get_server_url()
+
+    if not server_url:
+        console.print("[red]Server URL not configured.[/red]")
+        console.print("Run: cmu config --server <url>")
+        raise SystemExit(1)
+
+    keys = get_keys()
+    if not keys:
+        console.print("[red]No keys configured.[/red]")
+        console.print("Run: cmu config --key add <your-key>")
+        raise SystemExit(1)
+
+    # 특정 key가 지정되면 해당 key만, 아니면 등록된 모든 key로 조회
+    query_keys = [key] if key else [k["key"] for k in keys]
+
+    all_devices: dict[str, dict] = {}  # hostname -> device data (중복 제거)
+    for qk in query_keys:
+        try:
+            params = urllib.parse.urlencode({"key": qk})
+            req = urllib.request.Request(
+                f"{server_url}/api/usage?{params}",
+                headers={"User-Agent": "cmu"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                devices = json.loads(resp.read())
+                for d in devices:
+                    all_devices[d["hostname"]] = d
+        except urllib.error.URLError as e:
+            console.print(f"[red]Failed to fetch from server:[/red] {e}")
+            raise SystemExit(1)
+
+    if not all_devices:
+        console.print("[dim]No device data on server.[/dim]")
+        raise SystemExit(0)
+
+    return list(all_devices.values())
+
+
 @click.group(invoke_without_command=True, context_settings=CONTEXT_SETTINGS)
 @click.version_option(package_name="claude-multi-usage")
 @click.pass_context
@@ -176,7 +247,8 @@ def main(ctx):
       cmu dashboard -d 7         Last 7 days
       cmu dashboard -d 30        Last 30 days
       cmu dashboard --from 2026-03-01 --to 2026-03-07    Date range
-      cmu dashboard --all            All devices (via sync server)
+      cmu dashboard --all            All devices (per-device view)
+      cmu dashboard --all --merged   All devices (merged view)
 
     \b
     Data source:
@@ -195,8 +267,13 @@ def main(ctx):
 @click.option("--to", "date_to", default=None, metavar="YYYY-MM-DD",
               help="End date for the chart range.")
 @click.option("--all", "show_all", is_flag=True,
-              help="Show aggregated data from all devices via the sync server.")
-def dashboard(days: int, date_from: str, date_to: str, show_all: bool):
+              help="Show data from all devices via the sync server.")
+@click.option("--merged", is_flag=True,
+              help="Merge all devices into one view (only with --all).")
+@click.option("--key", "filter_key", default=None, metavar="KEY",
+              help="Filter by specific key (only with --all).")
+def dashboard(days: int, date_from: str, date_to: str, show_all: bool,
+              merged: bool, filter_key: str):
     """Show the full usage dashboard.
 
     \b
@@ -204,21 +281,26 @@ def dashboard(days: int, date_from: str, date_to: str, show_all: bool):
       cmu dashboard                 Last 14 days (default)
       cmu dashboard -d 7            Last 7 days
       cmu dashboard -d 30           Last 30 days
-      cmu dashboard -d 90           Last 3 months
-      cmu dashboard --from 2026-02-01                     From date to now
-      cmu dashboard --from 2026-02-01 --to 2026-02-28     Specific range
-      cmu dashboard --to 2026-02-28                       14 days ending at date
-      cmu dashboard --all                                 All devices (via server)
+      cmu dashboard --all                          All devices (per-device)
+      cmu dashboard --all --merged                  All devices (merged)
+      cmu dashboard --all --key team-key            Specific key (per-device)
+      cmu dashboard --all --key team-key --merged   Specific key (merged)
 
     \b
     Includes: summary, model usage, daily token chart,
     hourly heatmap, and top projects.
     """
     if show_all:
-        data = _fetch_all_usage()
+        devices = _fetch_all_devices(key=filter_key)
+        if merged:
+            data = _merge_devices_usage(devices)
+            render_dashboard(data, days=days, date_from=date_from, date_to=date_to)
+        else:
+            devices_data = [_build_device_usage_data(d) for d in devices]
+            render_multi_device_dashboard(devices_data, days=days, date_from=date_from, date_to=date_to)
     else:
         data = load_usage_data()
-    render_dashboard(data, days=days, date_from=date_from, date_to=date_to)
+        render_dashboard(data, days=days, date_from=date_from, date_to=date_to)
 
 
 @main.command(context_settings=CONTEXT_SETTINGS)
@@ -240,11 +322,9 @@ def today():
     data = load_usage_data()
     today_str = datetime.now().strftime("%Y-%m-%d")
 
-    # stats-cache에서 먼저 확인
     activity = next((a for a in data.daily_activity if a.date == today_str), None)
     tokens_data = next((t for t in data.daily_model_tokens if t.date == today_str), None)
 
-    # 없으면 세션 파일에서 실시간 계산
     if not activity:
         result = parse_today_usage()
         if result:
@@ -333,10 +413,9 @@ def cost():
         return
     daily_costs, total_cost, today_cost = costs
 
-    # 월별 집계
     monthly = defaultdict(lambda: defaultdict(float))
     for date_str, models in sorted(daily_costs.items()):
-        month = date_str[:7]  # YYYY-MM
+        month = date_str[:7]
         for model, info in models.items():
             short = model.split("-202")[0] if "-202" in model else model
             monthly[month][short] += info["cost"]
@@ -367,41 +446,139 @@ def cost():
     console.print()
 
 
-@main.command(context_settings=CONTEXT_SETTINGS)
-@click.option("--server", "server_url", default=None, metavar="URL",
-              help="Set the sync server URL.")
-@click.option("--email", "email_addr", default=None, metavar="EMAIL",
-              help="Set email for multi-device user identification.")
-@click.option("--show", is_flag=True, help="Show current configuration.")
-def config(server_url: str, email_addr: str, show: bool):
+@main.group(context_settings=CONTEXT_SETTINGS)
+def config():
     """Configure claude-multi-usage settings.
 
     \b
     Examples:
       cmu config --server https://your-server.com
-      cmu config --email donghun@example.com
+      cmu config --key add my-key "description"
+      cmu config --key remove my-key
+      cmu config --key list
       cmu config --show
     """
-    from .config import set_server_url, set_email, load_config
+    pass
+
+
+@config.command(name="server")
+@click.argument("url")
+def config_server(url: str):
+    """Set the sync server URL.
+
+    \b
+    Example:
+      cmu config server https://your-server.com
+    """
+    from .config import set_server_url
 
     console = Console()
+    set_server_url(url)
+    console.print(f"[green]Server URL set to:[/green] {url}")
 
-    if server_url:
-        set_server_url(server_url)
-        console.print(f"[green]Server URL set to:[/green] {server_url}")
-        if not email_addr:
-            return
 
-    if email_addr:
-        set_email(email_addr)
-        console.print(f"[green]Email set to:[/green] {email_addr}")
-        return
+@config.command(name="show")
+def config_show():
+    """Show current configuration."""
+    from .config import load_config
 
+    console = Console()
     cfg = load_config()
     console.print()
     console.print("[bold]Current configuration:[/bold]")
     console.print(f"  server_url: {cfg.get('server_url') or '[dim]not set[/dim]'}")
-    console.print(f"  email:      {cfg.get('email') or '[dim]not set[/dim]'}")
+    keys = cfg.get("keys", [])
+    if keys:
+        console.print("  keys:")
+        for k in keys:
+            desc = k.get("description", "")
+            desc_str = f"  [dim]{desc}[/dim]" if desc else ""
+            console.print(f"    - {k['key']}{desc_str}")
+    else:
+        console.print("  keys:       [dim]not set[/dim]")
+    console.print()
+
+
+@config.group(name="key", invoke_without_command=True)
+@click.pass_context
+def config_key(ctx):
+    """Manage keys for data grouping.
+
+    \b
+    Examples:
+      cmu config key add my-key "description"
+      cmu config key remove my-key
+      cmu config key list
+    """
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(config_key_list)
+
+
+@config_key.command(name="add")
+@click.argument("key")
+@click.argument("description", default="")
+def config_key_add(key: str, description: str):
+    """Add or update a key with optional description.
+
+    \b
+    Examples:
+      cmu config key add my-key "personal usage"
+      cmu config key add team-key "team shared key"
+    """
+    from .config import add_key
+
+    console = Console()
+    is_new = add_key(key, description)
+    if is_new:
+        console.print(f"[green]Key added:[/green] {key}")
+    else:
+        console.print(f"[green]Key updated:[/green] {key}")
+    if description:
+        console.print(f"  Description: {description}")
+
+
+@config_key.command(name="remove")
+@click.argument("key")
+def config_key_remove(key: str):
+    """Remove a key.
+
+    \b
+    Example:
+      cmu config key remove team-key
+    """
+    from .config import remove_key
+
+    console = Console()
+    removed = remove_key(key)
+    if removed:
+        console.print(f"[green]Key removed:[/green] {key}")
+    else:
+        console.print(f"[yellow]Key not found:[/yellow] {key}")
+
+
+@config_key.command(name="list")
+def config_key_list():
+    """List all registered keys."""
+    from .config import get_keys
+    from rich.table import Table
+
+    console = Console()
+    keys = get_keys()
+
+    if not keys:
+        console.print("[dim]No keys configured.[/dim]")
+        console.print("Run: cmu config key add <your-key>")
+        return
+
+    table = Table(box=None, padding=(0, 2))
+    table.add_column("Key", style="bold")
+    table.add_column("Description", style="dim")
+
+    for k in keys:
+        table.add_row(k["key"], k.get("description", ""))
+
+    console.print()
+    console.print(table)
     console.print()
 
 
@@ -412,7 +589,7 @@ def sync(quiet: bool):
 
     \b
     Pushes all local Claude Code usage data to the configured server.
-    Set the server URL first with: cmu config --server <url>
+    Data is pushed with all registered keys.
 
     \b
     Examples:
@@ -423,7 +600,7 @@ def sync(quiet: bool):
     import urllib.request
     import urllib.error
     from datetime import datetime
-    from .config import get_server_url, get_email
+    from .config import get_server_url, get_keys
 
     console = Console()
     server_url = get_server_url()
@@ -431,21 +608,22 @@ def sync(quiet: bool):
     if not server_url:
         if not quiet:
             console.print("[red]Server URL not configured.[/red]")
-            console.print("Run: cmu config --server <url>")
+            console.print("Run: cmu config server <url>")
         raise SystemExit(1)
 
-    email = get_email()
-    if not email:
+    keys = get_keys()
+    if not keys:
         if not quiet:
-            console.print("[red]Email not configured.[/red]")
-            console.print("Run: cmu config --email <your-email>")
+            console.print("[red]No keys configured.[/red]")
+            console.print("Run: cmu config key add <your-key>")
         raise SystemExit(1)
 
     data = load_usage_data()
+    key_values = [k["key"] for k in keys]
 
     payload = {
         "hostname": data.hostname,
-        "email": email,
+        "keys": key_values,
         "synced_at": datetime.now().isoformat(),
         "daily_activity": [
             {"date": a.date, "message_count": a.message_count,
@@ -487,7 +665,8 @@ def sync(quiet: bool):
         with urllib.request.urlopen(req, timeout=10) as resp:
             json.loads(resp.read())
             if not quiet:
-                console.print(f"[green]Synced to {server_url}[/green] ({data.hostname})")
+                keys_str = ", ".join(key_values)
+                console.print(f"[green]Synced to {server_url}[/green] ({data.hostname}, keys: {keys_str})")
     except urllib.error.URLError as e:
         if not quiet:
             console.print(f"[red]Sync failed:[/red] {e}")

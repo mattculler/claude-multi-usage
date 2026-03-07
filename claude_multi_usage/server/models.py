@@ -38,6 +38,8 @@ class SyncPayload(BaseModel):
     """Data pushed from a device to the server."""
     hostname: str
     synced_at: str
+    keys: list[str] = []
+    # backward compat: accept email and convert to keys
     email: str | None = None
     daily_activity: list[DeviceActivity] = []
     daily_model_tokens: list[DeviceModelTokens] = []
@@ -48,10 +50,16 @@ class SyncPayload(BaseModel):
     total_messages: int = 0
     first_session_date: str | None = None
 
+    def model_post_init(self, __context) -> None:
+        # email → keys 마이그레이션
+        if self.email and not self.keys:
+            self.keys = [self.email]
+        self.email = None
+
 
 class DeviceInfo(BaseModel):
     hostname: str
-    email: str | None = None
+    keys: list[str] = []
     last_synced: str
     total_sessions: int
     total_messages: int
