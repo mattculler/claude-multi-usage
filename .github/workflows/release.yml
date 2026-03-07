@@ -18,6 +18,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -53,7 +56,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout main
           git add deploy/k8s/kustomization.yaml
           git diff --cached --quiet || git commit -m "chore: update image tag to ${GITHUB_REF_NAME}"
           git push
