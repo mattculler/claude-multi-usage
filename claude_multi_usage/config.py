@@ -11,6 +11,7 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 DEFAULT_CONFIG = {
     "server_url": None,
     "keys": [],
+    "alias": None,
 }
 
 
@@ -95,3 +96,15 @@ def get_email() -> str | None:
 def set_email(email: str) -> None:
     """Deprecated: adds email as a key for backward compat."""
     add_key(email.strip().lower(), "migrated from email")
+
+
+def get_alias() -> str | None:
+    return load_config().get("alias")
+
+
+def set_alias(alias: str | None) -> None:
+    config = load_config()
+    config["alias"] = alias if alias else None
+    save_config(config)
+
+

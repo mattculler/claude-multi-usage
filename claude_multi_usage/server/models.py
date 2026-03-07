@@ -38,6 +38,7 @@ class SyncPayload(BaseModel):
     """Data pushed from a device to the server."""
     hostname: str
     synced_at: str
+    alias: str | None = None
     keys: list[str] = []
     # backward compat: accept email and convert to keys
     email: str | None = None
@@ -59,6 +60,7 @@ class SyncPayload(BaseModel):
 
 class DeviceInfo(BaseModel):
     hostname: str
+    alias: str | None = None
     keys: list[str] = []
     last_synced: str
     total_sessions: int

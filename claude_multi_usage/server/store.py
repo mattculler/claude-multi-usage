@@ -11,7 +11,6 @@ from .models import (
     DeviceInfo,
     DeviceActivity,
     DeviceModelTokens,
-    DeviceModelUsage,
     DeviceProject,
 )
 
@@ -40,6 +39,11 @@ class Store:
                 FOREIGN KEY (hostname) REFERENCES devices(hostname) ON DELETE CASCADE
             );
         """)
+        # alias 컬럼 마이그레이션
+        try:
+            self._conn.execute("SELECT alias FROM devices LIMIT 0")
+        except sqlite3.OperationalError:
+            self._conn.execute("ALTER TABLE devices ADD COLUMN alias TEXT")
         # email → key 마이그레이션: 기존 email 컬럼 데이터를 device_keys로 이동
         try:
             rows = self._conn.execute(
@@ -62,13 +66,14 @@ class Store:
             payload = _merge_payloads(existing, payload)
 
         self._conn.execute(
-            """INSERT INTO devices (hostname, last_synced, data)
-               VALUES (?, ?, ?)
+            """INSERT INTO devices (hostname, last_synced, data, alias)
+               VALUES (?, ?, ?, ?)
                ON CONFLICT(hostname)
                DO UPDATE SET last_synced = excluded.last_synced,
-                             data = excluded.data""",
+                             data = excluded.data,
+                             alias = excluded.alias""",
             (payload.hostname, payload.synced_at,
-             payload.model_dump_json()),
+             payload.model_dump_json(), payload.alias),
         )
         # device_keys 업데이트
         if payload.keys:
@@ -86,7 +91,7 @@ class Store:
     def list_devices(self, key: str | None = None) -> list[DeviceInfo]:
         if key:
             rows = self._conn.execute(
-                """SELECT d.hostname, d.last_synced, d.data
+                """SELECT d.hostname, d.last_synced, d.data, d.alias
                    FROM devices d
                    JOIN device_keys dk ON d.hostname = dk.hostname
                    WHERE dk.key = ?""",
@@ -94,12 +99,11 @@ class Store:
             ).fetchall()
         else:
             rows = self._conn.execute(
-                "SELECT hostname, last_synced, data FROM devices"
+                "SELECT hostname, last_synced, data, alias FROM devices"
             ).fetchall()
         devices = []
         for row in rows:
             data = json.loads(row["data"])
-            # 해당 device의 keys 조회
             key_rows = self._conn.execute(
                 "SELECT key FROM device_keys WHERE hostname = ?",
                 (row["hostname"],),
@@ -107,6 +111,7 @@ class Store:
             keys = [kr["key"] for kr in key_rows]
             devices.append(DeviceInfo(
                 hostname=row["hostname"],
+                alias=row["alias"],
                 keys=keys,
                 last_synced=row["last_synced"],
                 total_sessions=data.get("total_sessions", 0),
@@ -116,12 +121,12 @@ class Store:
 
     def get_device_data(self, hostname: str) -> SyncPayload | None:
         row = self._conn.execute(
-            "SELECT data FROM devices WHERE hostname = ?", (hostname,)
+            "SELECT data, alias FROM devices WHERE hostname = ?", (hostname,)
         ).fetchone()
         if not row:
             return None
         payload = SyncPayload.model_validate_json(row["data"])
-        # DB에서 keys 복원
+        payload.alias = row["alias"]
         key_rows = self._conn.execute(
             "SELECT key FROM device_keys WHERE hostname = ?",
             (hostname,),
@@ -132,7 +137,7 @@ class Store:
     def get_all_data(self, key: str | None = None) -> list[SyncPayload]:
         if key:
             rows = self._conn.execute(
-                """SELECT d.data, d.hostname
+                """SELECT d.data, d.hostname, d.alias
                    FROM devices d
                    JOIN device_keys dk ON d.hostname = dk.hostname
                    WHERE dk.key = ?""",
@@ -140,12 +145,12 @@ class Store:
             ).fetchall()
         else:
             rows = self._conn.execute(
-                "SELECT data, hostname FROM devices"
+                "SELECT data, hostname, alias FROM devices"
             ).fetchall()
         results = []
         for row in rows:
             payload = SyncPayload.model_validate_json(row["data"])
-            # DB에서 keys 복원
+            payload.alias = row["alias"]
             key_rows = self._conn.execute(
                 "SELECT key FROM device_keys WHERE hostname = ?",
                 (row["hostname"],),
@@ -164,19 +169,20 @@ class Store:
 
 def _merge_payloads(old: SyncPayload, new: SyncPayload) -> SyncPayload:
     """Merge *new* payload into *old*, preserving historical data."""
-    # keys는 합집합
     merged_keys = list(set(old.keys + new.keys))
     return SyncPayload(
         hostname=new.hostname,
         synced_at=new.synced_at,
+        alias=new.alias or old.alias,
         keys=merged_keys,
         daily_activity=_merge_daily_activity(old.daily_activity, new.daily_activity),
         daily_model_tokens=_merge_daily_model_tokens(
             old.daily_model_tokens, new.daily_model_tokens
         ),
-        model_usage=_merge_model_usage(old.model_usage, new.model_usage),
+        # 누적 데이터: 새 payload에 있으면 사용, 없으면 기존 유지 (하위호환)
+        model_usage=new.model_usage or old.model_usage,
         projects=_merge_projects(old.projects, new.projects),
-        hour_counts=_merge_hour_counts(old.hour_counts, new.hour_counts),
+        hour_counts=new.hour_counts or old.hour_counts,
         total_sessions=max(old.total_sessions, new.total_sessions),
         total_messages=max(old.total_messages, new.total_messages),
         first_session_date=_earlier_date(old.first_session_date, new.first_session_date),
@@ -201,26 +207,6 @@ def _merge_daily_model_tokens(
     return sorted(by_date.values(), key=lambda t: t.date)
 
 
-def _merge_model_usage(
-    old: list[DeviceModelUsage], new: list[DeviceModelUsage]
-) -> list[DeviceModelUsage]:
-    by_model: dict[str, DeviceModelUsage] = {u.model: u for u in old}
-    for u in new:
-        if u.model in by_model:
-            prev = by_model[u.model]
-            by_model[u.model] = DeviceModelUsage(
-                model=u.model,
-                input_tokens=max(prev.input_tokens, u.input_tokens),
-                output_tokens=max(prev.output_tokens, u.output_tokens),
-                cache_read_tokens=max(prev.cache_read_tokens, u.cache_read_tokens),
-                cache_creation_tokens=max(
-                    prev.cache_creation_tokens, u.cache_creation_tokens
-                ),
-            )
-        else:
-            by_model[u.model] = u
-    return list(by_model.values())
-
 
 def _merge_projects(
     old: list[DeviceProject], new: list[DeviceProject]
@@ -241,14 +227,6 @@ def _merge_projects(
             by_name[p.name] = p
     return list(by_name.values())
 
-
-def _merge_hour_counts(
-    old: dict[str, int], new: dict[str, int]
-) -> dict[str, int]:
-    merged = dict(old)
-    for hour, count in new.items():
-        merged[hour] = max(merged.get(hour, 0), count)
-    return merged
 
 
 def _earlier_date(a: str | None, b: str | None) -> str | None:

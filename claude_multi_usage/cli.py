@@ -26,7 +26,7 @@ def _build_device_usage_data(device: dict) -> "UsageData":
         except (ValueError, AttributeError):
             return None
 
-    return UsageData(
+    usage_data = UsageData(
         hostname=device["hostname"],
         daily_activity=[
             DailyActivity(
@@ -67,6 +67,8 @@ def _build_device_usage_data(device: dict) -> "UsageData":
         total_messages=device.get("total_messages", 0),
         first_session_date=device.get("first_session_date"),
     )
+    usage_data.alias = device.get("alias")
+    return usage_data
 
 
 def _merge_devices_usage(devices: list[dict]) -> "UsageData":
@@ -247,8 +249,8 @@ def main(ctx):
       cmu dashboard -d 7         Last 7 days
       cmu dashboard -d 30        Last 30 days
       cmu dashboard --from 2026-03-01 --to 2026-03-07    Date range
-      cmu dashboard --all            All devices (per-device view)
-      cmu dashboard --all --merged   All devices (merged view)
+      cmu diff                   All devices (per-device view)
+      cmu diff --merged          All devices (merged view)
 
     \b
     Data source:
@@ -266,14 +268,7 @@ def main(ctx):
               help="Start date for the chart range.")
 @click.option("--to", "date_to", default=None, metavar="YYYY-MM-DD",
               help="End date for the chart range.")
-@click.option("--all", "show_all", is_flag=True,
-              help="Show data from all devices via the sync server.")
-@click.option("--merged", is_flag=True,
-              help="Merge all devices into one view (only with --all).")
-@click.option("--key", "filter_key", default=None, metavar="KEY",
-              help="Filter by specific key (only with --all).")
-def dashboard(days: int, date_from: str, date_to: str, show_all: bool,
-              merged: bool, filter_key: str):
+def dashboard(days: int, date_from: str, date_to: str):
     """Show the full usage dashboard.
 
     \b
@@ -281,26 +276,13 @@ def dashboard(days: int, date_from: str, date_to: str, show_all: bool,
       cmu dashboard                 Last 14 days (default)
       cmu dashboard -d 7            Last 7 days
       cmu dashboard -d 30           Last 30 days
-      cmu dashboard --all                          All devices (per-device)
-      cmu dashboard --all --merged                  All devices (merged)
-      cmu dashboard --all --key team-key            Specific key (per-device)
-      cmu dashboard --all --key team-key --merged   Specific key (merged)
 
     \b
     Includes: summary, model usage, daily token chart,
     hourly heatmap, and top projects.
     """
-    if show_all:
-        devices = _fetch_all_devices(key=filter_key)
-        if merged:
-            data = _merge_devices_usage(devices)
-            render_dashboard(data, days=days, date_from=date_from, date_to=date_to)
-        else:
-            devices_data = [_build_device_usage_data(d) for d in devices]
-            render_multi_device_dashboard(devices_data, days=days, date_from=date_from, date_to=date_to)
-    else:
-        data = load_usage_data()
-        render_dashboard(data, days=days, date_from=date_from, date_to=date_to)
+    data = load_usage_data()
+    render_dashboard(data, days=days, date_from=date_from, date_to=date_to)
 
 
 @main.command(context_settings=CONTEXT_SETTINGS)
@@ -446,6 +428,42 @@ def cost():
     console.print()
 
 
+@main.command(context_settings=CONTEXT_SETTINGS)
+@click.option("--days", "-d", default=14, show_default=True,
+              help="Number of recent days to display in the chart.")
+@click.option("--from", "date_from", default=None, metavar="YYYY-MM-DD",
+              help="Start date for the chart range.")
+@click.option("--to", "date_to", default=None, metavar="YYYY-MM-DD",
+              help="End date for the chart range.")
+@click.option("--merged", is_flag=True,
+              help="Merge all devices into one view.")
+@click.option("--key", "filter_key", default=None, metavar="KEY",
+              help="Filter by specific key.")
+def diff(days: int, date_from: str, date_to: str, merged: bool,
+         filter_key: str):
+    """Show multi-device usage from the sync server.
+
+    \b
+    Examples:
+      cmu diff                       All devices (per-device view)
+      cmu diff --merged              All devices (merged view)
+      cmu diff --key team-key        Specific key
+      cmu diff -d 30                 Last 30 days
+
+    \b
+    Includes: summary, model usage, daily token chart, and top projects.
+    Hourly heatmap is omitted (cumulative data not synced).
+    """
+    devices = _fetch_all_devices(key=filter_key)
+
+    if merged:
+        data = _merge_devices_usage(devices)
+        render_dashboard(data, days=days, date_from=date_from, date_to=date_to)
+    else:
+        devices_data = [_build_device_usage_data(d) for d in devices]
+        render_multi_device_dashboard(devices_data, days=days, date_from=date_from, date_to=date_to)
+
+
 @main.group(context_settings=CONTEXT_SETTINGS)
 def config():
     """Configure claude-multi-usage settings.
@@ -487,6 +505,7 @@ def config_show():
     console.print()
     console.print("[bold]Current configuration:[/bold]")
     console.print(f"  server_url: {cfg.get('server_url') or '[dim]not set[/dim]'}")
+    console.print(f"  alias:      {cfg.get('alias') or '[dim]not set[/dim]'}")
     keys = cfg.get("keys", [])
     if keys:
         console.print("  keys:")
@@ -497,6 +516,23 @@ def config_show():
     else:
         console.print("  keys:       [dim]not set[/dim]")
     console.print()
+
+
+@config.command(name="alias")
+@click.argument("name")
+def config_alias(name: str):
+    """Set this device's display alias.
+
+    \b
+    Examples:
+      cmu config alias macbook-air
+      cmu config alias "회사 데스크탑"
+    """
+    from .config import set_alias
+
+    console = Console()
+    set_alias(name)
+    console.print(f"[green]Alias set to:[/green] {name}")
 
 
 @config.group(name="key", invoke_without_command=True)
@@ -600,7 +636,7 @@ def sync(quiet: bool):
     import urllib.request
     import urllib.error
     from datetime import datetime
-    from .config import get_server_url, get_keys
+    from .config import get_server_url, get_keys, get_alias
 
     console = Console()
     server_url = get_server_url()
@@ -623,6 +659,7 @@ def sync(quiet: bool):
 
     payload = {
         "hostname": data.hostname,
+        "alias": get_alias(),
         "keys": key_values,
         "synced_at": datetime.now().isoformat(),
         "daily_activity": [
@@ -634,12 +671,6 @@ def sync(quiet: bool):
             {"date": t.date, "tokens_by_model": t.tokens_by_model}
             for t in data.daily_model_tokens
         ],
-        "model_usage": [
-            {"model": m.model, "input_tokens": m.input_tokens,
-             "output_tokens": m.output_tokens, "cache_read_tokens": m.cache_read_tokens,
-             "cache_creation_tokens": m.cache_creation_tokens}
-            for m in data.model_usage
-        ],
         "projects": [
             {"name": p.name, "session_count": p.session_count,
              "output_tokens": p.output_tokens, "input_tokens": p.input_tokens,
@@ -647,10 +678,6 @@ def sync(quiet: bool):
              "last_seen": p.last_seen.isoformat() if p.last_seen else None}
             for p in data.projects
         ],
-        "hour_counts": {str(k): v for k, v in data.hour_counts.items()},
-        "total_sessions": data.total_sessions,
-        "total_messages": data.total_messages,
-        "first_session_date": data.first_session_date,
     }
 
     body = json.dumps(payload).encode("utf-8")
