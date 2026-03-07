@@ -337,6 +337,16 @@ def today():
             table.add_row(f"Tokens ({short})", format_tokens(tokens))
         table.add_row("Total Tokens", format_tokens(tokens_data.total_tokens))
 
+    # 오늘 비용 계산
+    from .cost_cache import _parse_sessions_for_date_range
+    from .pricing import get_pricing
+    if get_pricing() is not None:
+        today_daily = _parse_sessions_for_date_range(today_str, today_str)
+        today_cost = sum(
+            d["cost"] for models in today_daily.values() for d in models.values()
+        )
+        table.add_row("Cost", f"[bold yellow]{format_cost(today_cost)}[/bold yellow]")
+
     console.print()
     console.print(Panel(table, title=f"Today - {data.hostname}", border_style="blue"))
     console.print()

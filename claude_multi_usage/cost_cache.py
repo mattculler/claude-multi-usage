@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from .pricing import calculate_model_cost, get_pricing
+from .parser import _utc_to_local
 
 CACHE_DIR = Path.home() / ".claude-multi-usage"
 CACHE_FILE = CACHE_DIR / "cost-cache.json"
@@ -69,7 +70,9 @@ def _parse_sessions_for_date_range(start_date: str, end_date: str):
                         else:
                             continue
 
-                        date_str = ts[:10] if ts else ""
+                        # UTC timestamp를 로컬 시간으로 변환
+                        local_dt = _utc_to_local(ts)
+                        date_str = local_dt.strftime("%Y-%m-%d") if local_dt else ""
                         if not date_str or date_str < start_date or date_str > end_date:
                             continue
 

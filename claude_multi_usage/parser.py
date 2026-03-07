@@ -16,6 +16,17 @@ HISTORY_FILE = CLAUDE_DIR / "history.jsonl"
 PROJECTS_DIR = CLAUDE_DIR / "projects"
 
 
+def _utc_to_local(ts: str) -> datetime | None:
+    """Convert UTC timestamp string (with Z or +00:00) to local datetime."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt.astimezone()
+    except (ValueError, AttributeError):
+        return None
+
+
 @dataclass
 class DailyActivity:
     date: str
@@ -220,13 +231,10 @@ def parse_today_hourly() -> list[HourlyUsage]:
                             d = json.loads(line)
                         except json.JSONDecodeError:
                             continue
-                        ts = d.get("timestamp", "")
-                        if not ts.startswith(today_str):
+                        local_dt = _utc_to_local(d.get("timestamp", ""))
+                        if local_dt is None or local_dt.strftime("%Y-%m-%d") != today_str:
                             continue
-                        try:
-                            hour = int(ts[11:13])
-                        except (ValueError, IndexError):
-                            continue
+                        hour = local_dt.hour
                         msg_type = d.get("type")
                         if msg_type == "user":
                             hourly[hour]["messages"] += 1
@@ -276,8 +284,8 @@ def parse_today_usage() -> Optional[DailyActivity]:
                             d = json.loads(line)
                         except json.JSONDecodeError:
                             continue
-                        ts = d.get("timestamp", "")
-                        if not ts.startswith(today_str):
+                        local_dt = _utc_to_local(d.get("timestamp", ""))
+                        if local_dt is None or local_dt.strftime("%Y-%m-%d") != today_str:
                             continue
                         msg_type = d.get("type")
                         if msg_type == "user":
