@@ -81,3 +81,45 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  update-homebrew:
+    runs-on: ubuntu-latest
+    needs: publish-pypi
+
+    steps:
+      - name: Wait for PyPI to be available
+        run: |
+          TAG=${GITHUB_REF_NAME#v}
+          for i in $(seq 1 30); do
+            if curl -sf "https://pypi.org/pypi/claude-multi-usage/$TAG/json" > /dev/null; then
+              echo "PyPI package available"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for PyPI"
+          exit 1
+
+      - name: Update Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          TAG=${GITHUB_REF_NAME#v}
+          PYPI_JSON=$(curl -sf "https://pypi.org/pypi/claude-multi-usage/$TAG/json")
+          NEW_URL=$(echo "$PYPI_JSON" | python3 -c "import json,sys; [print(f['url']) for f in json.load(sys.stdin)['urls'] if f['filename'].endswith('.tar.gz')]")
+          NEW_SHA=$(echo "$PYPI_JSON" | python3 -c "import json,sys; [print(f['digests']['sha256']) for f in json.load(sys.stdin)['urls'] if f['filename'].endswith('.tar.gz')]")
+
+          # Get current formula
+          FORMULA_RESP=$(curl -sf -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/hunknownn/homebrew-tap/contents/Formula/claude-multi-usage.rb")
+          FILE_SHA=$(echo "$FORMULA_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin)['sha'])")
+          CONTENT=$(echo "$FORMULA_RESP" | python3 -c "import json,sys,base64; print(base64.b64decode(json.load(sys.stdin)['content']).decode())")
+
+          # Update url and sha256
+          UPDATED=$(echo "$CONTENT" | sed "s|url \"https://files.pythonhosted.org/.*\"|url \"$NEW_URL\"|" | sed "0,/sha256 \".*\"/{s|sha256 \".*\"|sha256 \"$NEW_SHA\"|}")
+          ENCODED=$(echo "$UPDATED" | base64 -w 0)
+
+          # Push update
+          curl -sf -X PUT -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/hunknownn/homebrew-tap/contents/Formula/claude-multi-usage.rb" \
+            -d "{\"message\":\"chore: bump claude-multi-usage to $TAG\",\"content\":\"$ENCODED\",\"sha\":\"$FILE_SHA\"}"
