@@ -10,6 +10,7 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
     "server_url": None,
+    "email": None,
 }
 
 
@@ -44,4 +45,14 @@ def get_server_url() -> str | None:
 def set_server_url(url: str) -> None:
     config = load_config()
     config["server_url"] = url.rstrip("/")
+    save_config(config)
+
+
+def get_email() -> str | None:
+    return load_config().get("email")
+
+
+def set_email(email: str) -> None:
+    config = load_config()
+    config["email"] = email.strip().lower()
     save_config(config)

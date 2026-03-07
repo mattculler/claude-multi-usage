@@ -18,7 +18,8 @@ def _fetch_all_usage():
     import json
     import urllib.request
     import urllib.error
-    from .config import get_server_url
+    import urllib.parse
+    from .config import get_server_url, get_email
     from .parser import UsageData, DailyActivity, DailyModelTokens, ModelUsage, ProjectSummary
     from datetime import datetime
 
@@ -30,8 +31,15 @@ def _fetch_all_usage():
         console.print("Run: cmu config --server <url>")
         raise SystemExit(1)
 
+    email = get_email()
+    if not email:
+        console.print("[red]Email not configured.[/red]")
+        console.print("Run: cmu config --email <your-email>")
+        raise SystemExit(1)
+
     try:
-        req = urllib.request.Request(f"{server_url}/api/usage")
+        params = urllib.parse.urlencode({"email": email})
+        req = urllib.request.Request(f"{server_url}/api/usage?{params}")
         with urllib.request.urlopen(req, timeout=10) as resp:
             devices = json.loads(resp.read())
     except urllib.error.URLError as e:
@@ -362,28 +370,38 @@ def cost():
 @main.command(context_settings=CONTEXT_SETTINGS)
 @click.option("--server", "server_url", default=None, metavar="URL",
               help="Set the sync server URL.")
+@click.option("--email", "email_addr", default=None, metavar="EMAIL",
+              help="Set email for multi-device user identification.")
 @click.option("--show", is_flag=True, help="Show current configuration.")
-def config(server_url: str, show: bool):
+def config(server_url: str, email_addr: str, show: bool):
     """Configure claude-multi-usage settings.
 
     \b
     Examples:
       cmu config --server https://your-server.com
+      cmu config --email donghun@example.com
       cmu config --show
     """
-    from .config import get_server_url, set_server_url, load_config
+    from .config import set_server_url, set_email, load_config
 
     console = Console()
 
     if server_url:
         set_server_url(server_url)
         console.print(f"[green]Server URL set to:[/green] {server_url}")
+        if not email_addr:
+            return
+
+    if email_addr:
+        set_email(email_addr)
+        console.print(f"[green]Email set to:[/green] {email_addr}")
         return
 
     cfg = load_config()
     console.print()
     console.print("[bold]Current configuration:[/bold]")
     console.print(f"  server_url: {cfg.get('server_url') or '[dim]not set[/dim]'}")
+    console.print(f"  email:      {cfg.get('email') or '[dim]not set[/dim]'}")
     console.print()
 
 
@@ -405,7 +423,7 @@ def sync(quiet: bool):
     import urllib.request
     import urllib.error
     from datetime import datetime
-    from .config import get_server_url
+    from .config import get_server_url, get_email
 
     console = Console()
     server_url = get_server_url()
@@ -416,10 +434,18 @@ def sync(quiet: bool):
             console.print("Run: cmu config --server <url>")
         raise SystemExit(1)
 
+    email = get_email()
+    if not email:
+        if not quiet:
+            console.print("[red]Email not configured.[/red]")
+            console.print("Run: cmu config --email <your-email>")
+        raise SystemExit(1)
+
     data = load_usage_data()
 
     payload = {
         "hostname": data.hostname,
+        "email": email,
         "synced_at": datetime.now().isoformat(),
         "daily_activity": [
             {"date": a.date, "message_count": a.message_count,

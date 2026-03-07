@@ -6,7 +6,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 
 from .models import SyncPayload, DeviceInfo
 from .store import Store
@@ -41,21 +41,24 @@ async def sync(payload: SyncPayload):
 
 
 @app.get("/api/devices", response_model=list[DeviceInfo])
-async def list_devices():
-    """List all registered devices."""
-    return get_store().list_devices()
+async def list_devices(
+    email: str | None = Query(None, description="Filter by email"),
+):
+    """List all registered devices, optionally filtered by email."""
+    return get_store().list_devices(email=email)
 
 
 @app.get("/api/usage")
 async def get_usage(
+    email: str | None = Query(None, description="Filter by email"),
     hostname: str | None = Query(None, description="Filter by hostname"),
 ):
-    """Get aggregated usage data, optionally filtered by device."""
+    """Get aggregated usage data, filtered by email or hostname."""
     store = get_store()
     if hostname:
         data = store.get_device_data(hostname)
         return [data] if data else []
-    return store.get_all_data()
+    return store.get_all_data(email=email)
 
 
 @app.get("/api/health")

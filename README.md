@@ -53,15 +53,18 @@ cmu server start --host 0.0.0.0 --port 8000
 ### Client Setup
 
 ```bash
-# Set server URL (once)
+# Set server URL and email (once per device)
 cmu config --server https://your-server.com
+cmu config --email donghun@example.com
 
 # Sync usage data
 cmu sync
 
-# View all devices' usage
+# View all your devices' usage (filtered by email)
 cmu dashboard --all
 ```
+
+> Email is used to isolate data between users. Only devices with the same email can see each other's data. Local commands (`cmu dashboard`, `cmu today`, `cmu cost`, etc.) work without email.
 
 ### Auto Sync
 
@@ -141,6 +144,7 @@ No API keys required. Local data stays local unless you opt in to sync.
 
 - [x] Multi-device sync via central server ([#2](https://github.com/hunknownn/claude-multi-usage/issues/2))
 - [x] Accurate cost estimation with incremental caching ([#5](https://github.com/hunknownn/claude-multi-usage/issues/5))
+- [x] Email-based user isolation for multi-device data ([#8](https://github.com/hunknownn/claude-multi-usage/issues/8))
 - [ ] Web dashboard ([#3](https://github.com/hunknownn/claude-multi-usage/issues/3))
 - [ ] Homebrew support
 

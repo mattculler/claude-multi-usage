@@ -23,30 +23,47 @@ class Store:
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS devices (
                 hostname TEXT PRIMARY KEY,
+                email TEXT,
                 last_synced TEXT NOT NULL,
                 data TEXT NOT NULL
             );
         """)
+        # 기존 테이블에 email 컬럼이 없으면 추가 (마이그레이션)
+        try:
+            self._conn.execute("SELECT email FROM devices LIMIT 1")
+        except sqlite3.OperationalError:
+            self._conn.execute("ALTER TABLE devices ADD COLUMN email TEXT")
         self._conn.commit()
 
     def upsert_device(self, payload: SyncPayload) -> None:
         self._conn.execute(
-            """INSERT INTO devices (hostname, last_synced, data)
-               VALUES (?, ?, ?)
+            """INSERT INTO devices (hostname, email, last_synced, data)
+               VALUES (?, ?, ?, ?)
                ON CONFLICT(hostname)
-               DO UPDATE SET last_synced = excluded.last_synced,
+               DO UPDATE SET email = excluded.email,
+                             last_synced = excluded.last_synced,
                              data = excluded.data""",
-            (payload.hostname, payload.synced_at, payload.model_dump_json()),
+            (payload.hostname, payload.email, payload.synced_at,
+             payload.model_dump_json()),
         )
         self._conn.commit()
 
-    def list_devices(self) -> list[DeviceInfo]:
-        rows = self._conn.execute("SELECT hostname, last_synced, data FROM devices").fetchall()
+    def list_devices(self, email: str | None = None) -> list[DeviceInfo]:
+        if email:
+            rows = self._conn.execute(
+                "SELECT hostname, email, last_synced, data FROM devices WHERE email = ?",
+                (email,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT hostname, email, last_synced, data FROM devices"
+            ).fetchall()
         devices = []
         for row in rows:
             data = json.loads(row["data"])
             devices.append(DeviceInfo(
                 hostname=row["hostname"],
+                email=row["email"],
                 last_synced=row["last_synced"],
                 total_sessions=data.get("total_sessions", 0),
                 total_messages=data.get("total_messages", 0),
@@ -61,8 +78,13 @@ class Store:
             return None
         return SyncPayload.model_validate_json(row["data"])
 
-    def get_all_data(self) -> list[SyncPayload]:
-        rows = self._conn.execute("SELECT data FROM devices").fetchall()
+    def get_all_data(self, email: str | None = None) -> list[SyncPayload]:
+        if email:
+            rows = self._conn.execute(
+                "SELECT data FROM devices WHERE email = ?", (email,)
+            ).fetchall()
+        else:
+            rows = self._conn.execute("SELECT data FROM devices").fetchall()
         return [SyncPayload.model_validate_json(row["data"]) for row in rows]
 
     def close(self):
