@@ -190,6 +190,66 @@ def parse_projects(with_tokens: bool = True) -> list:
     return sorted(projects, key=lambda p: p.output_tokens, reverse=True)
 
 
+@dataclass
+class HourlyUsage:
+    hour: int
+    message_count: int
+    session_count: int
+    tokens: int
+
+
+def parse_today_hourly() -> list[HourlyUsage]:
+    """Parse today's usage broken down by hour (0-23)."""
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    # hour -> {messages, sessions, tokens}
+    hourly: dict[int, dict] = {h: {"messages": 0, "sessions": set(), "tokens": 0} for h in range(24)}
+
+    if not PROJECTS_DIR.exists():
+        return []
+
+    for project_dir in PROJECTS_DIR.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for session_file in project_dir.glob("*.jsonl"):
+            if datetime.fromtimestamp(session_file.stat().st_mtime).strftime("%Y-%m-%d") != today_str:
+                continue
+            try:
+                with open(session_file) as f:
+                    for line in f:
+                        try:
+                            d = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        ts = d.get("timestamp", "")
+                        if not ts.startswith(today_str):
+                            continue
+                        try:
+                            hour = int(ts[11:13])
+                        except (ValueError, IndexError):
+                            continue
+                        msg_type = d.get("type")
+                        if msg_type == "user":
+                            hourly[hour]["messages"] += 1
+                            hourly[hour]["sessions"].add(str(session_file))
+                        elif msg_type == "assistant":
+                            hourly[hour]["messages"] += 1
+                            usage = d.get("message", {}).get("usage", {})
+                            hourly[hour]["tokens"] += usage.get("output_tokens", 0)
+                            hourly[hour]["sessions"].add(str(session_file))
+            except (OSError, IOError):
+                continue
+
+    return [
+        HourlyUsage(
+            hour=h,
+            message_count=info["messages"],
+            session_count=len(info["sessions"]),
+            tokens=info["tokens"],
+        )
+        for h, info in sorted(hourly.items())
+    ]
+
+
 def parse_today_usage() -> Optional[DailyActivity]:
     """Calculate today's usage by scanning recent session files."""
     today_str = datetime.now().strftime("%Y-%m-%d")

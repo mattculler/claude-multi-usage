@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import click
 
-from .parser import load_usage_data, parse_today_usage
-from .dashboard import render_dashboard, render_multi_device_dashboard, make_projects_table, make_models_table, Console, format_tokens
+from .parser import load_usage_data, parse_today_usage, HourlyUsage
+from .dashboard import render_dashboard, render_multi_device_dashboard, make_projects_table, make_models_table, make_today_hourly_chart, Console, format_tokens
 from .cost_cache import get_costs
 from .pricing import format_cost
 
@@ -68,6 +68,11 @@ def _build_device_usage_data(device: dict) -> "UsageData":
         first_session_date=device.get("first_session_date"),
     )
     usage_data.alias = device.get("alias")
+    usage_data.today_hourly = [
+        HourlyUsage(hour=h["hour"], message_count=h["message_count"],
+                    session_count=h["session_count"], tokens=h["tokens"])
+        for h in device.get("today_hourly", [])
+    ]
     return usage_data
 
 
@@ -242,6 +247,7 @@ def main(ctx):
     Quick start:
       cmu                        Full dashboard (last 14 days)
       cmu today                  Today's realtime usage
+      cmu hourly                 Today's hourly breakdown
       cmu projects               Project breakdown with token usage
       cmu projects -n 5          Top 5 projects only
       cmu models                 Model usage breakdown
@@ -333,6 +339,32 @@ def today():
 
     console.print()
     console.print(Panel(table, title=f"Today - {data.hostname}", border_style="blue"))
+    console.print()
+
+
+@main.command(context_settings=CONTEXT_SETTINGS)
+def hourly():
+    """Show today's usage broken down by hour.
+
+    \b
+    Parses session .jsonl files to show per-hour token usage,
+    message counts, and session counts for today.
+
+    \b
+    Shows: 24-hour bar chart with tokens, messages, sessions per hour.
+    Current hour is marked with *.
+    """
+    from .parser import parse_today_hourly
+
+    console = Console()
+    hourly_data = parse_today_hourly()
+
+    if not any(h.tokens > 0 or h.message_count > 0 for h in hourly_data):
+        console.print("[dim]No usage data for today.[/dim]")
+        return
+
+    console.print()
+    console.print(make_today_hourly_chart(hourly_data))
     console.print()
 
 
@@ -657,11 +689,19 @@ def sync(quiet: bool):
     data = load_usage_data()
     key_values = [k["key"] for k in keys]
 
+    from .parser import parse_today_hourly
+    today_hourly = parse_today_hourly()
+
     payload = {
         "hostname": data.hostname,
         "alias": get_alias(),
         "keys": key_values,
         "synced_at": datetime.now().isoformat(),
+        "today_hourly": [
+            {"hour": h.hour, "message_count": h.message_count,
+             "session_count": h.session_count, "tokens": h.tokens}
+            for h in today_hourly
+        ],
         "daily_activity": [
             {"date": a.date, "message_count": a.message_count,
              "session_count": a.session_count, "tool_call_count": a.tool_call_count}

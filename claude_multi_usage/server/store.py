@@ -12,6 +12,7 @@ from .models import (
     DeviceActivity,
     DeviceModelTokens,
     DeviceProject,
+    DeviceHourlyUsage,
 )
 
 DEFAULT_DB_PATH = Path("/data") / "server.db"
@@ -183,6 +184,7 @@ def _merge_payloads(old: SyncPayload, new: SyncPayload) -> SyncPayload:
         model_usage=new.model_usage or old.model_usage,
         projects=_merge_projects(old.projects, new.projects),
         hour_counts=new.hour_counts or old.hour_counts,
+        today_hourly=new.today_hourly if new.today_hourly else old.today_hourly,
         total_sessions=max(old.total_sessions, new.total_sessions),
         total_messages=max(old.total_messages, new.total_messages),
         first_session_date=_earlier_date(old.first_session_date, new.first_session_date),

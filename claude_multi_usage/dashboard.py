@@ -10,7 +10,7 @@ from rich.table import Table
 from rich.columns import Columns
 from rich.rule import Rule
 
-from .parser import UsageData
+from .parser import UsageData, HourlyUsage
 from .pricing import format_cost
 from .cost_cache import get_costs
 
@@ -141,6 +141,36 @@ def make_hourly_heatmap(data: UsageData) -> Panel:
     return Panel(table, title="Hourly Sessions (all time)", border_style="yellow")
 
 
+def make_today_hourly_chart(hourly: list[HourlyUsage]) -> Panel:
+    """Today's 24-hour usage bar chart."""
+    now_hour = datetime.now().hour
+    max_tokens = max((h.tokens for h in hourly), default=1) or 1
+    bar_width = 25
+    lines = []
+
+    for h in hourly:
+        if h.hour > now_hour + 1:
+            break
+        marker = " *" if h.hour == now_hour else "  "
+        hour_label = f"{h.hour:02d}:00"
+        if h.tokens > 0:
+            filled = int((h.tokens / max_tokens) * bar_width)
+            bar = "\u2588" * filled + "\u2591" * (bar_width - filled)
+            line = f"{marker} {hour_label}  {bar}  {format_tokens(h.tokens):>6}  ({h.message_count} msgs, {h.session_count} sess)"
+        else:
+            empty_bar = "\u2591" * bar_width
+            line = f"{marker} {hour_label}  {empty_bar}"
+        lines.append(line)
+
+    total_tokens = sum(h.tokens for h in hourly)
+    total_msgs = sum(h.message_count for h in hourly)
+    lines.append("")
+    lines.append(f"   Total   {format_tokens(total_tokens)} tokens, {total_msgs} messages")
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    return Panel("\n".join(lines), title=f"Today Hourly Usage ({today_str})", border_style="cyan")
+
+
 def make_projects_table(data: UsageData, limit: int = 10) -> Panel:
     """Top projects by token usage."""
     table = Table(box=None, padding=(0, 1))
@@ -211,6 +241,13 @@ def render_dashboard(data: UsageData, days: int = 14,
     console.print(make_daily_chart(data, days=days, date_from=date_from, date_to=date_to))
     console.print()
 
+    # Today hourly chart
+    from .parser import parse_today_hourly
+    hourly = parse_today_hourly()
+    if any(h.tokens > 0 or h.message_count > 0 for h in hourly):
+        console.print(make_today_hourly_chart(hourly))
+        console.print()
+
     # Hourly heatmap
     console.print(make_hourly_heatmap(data))
     console.print()
@@ -257,7 +294,12 @@ def render_multi_device_dashboard(
         console.print(make_daily_chart(data, days=days, date_from=date_from, date_to=date_to))
         console.print()
 
-        # Hourly heatmap 생략 (diff에서는 누적 데이터 미제공)
+        # Today hourly chart
+        if hasattr(data, 'today_hourly') and data.today_hourly and any(
+            h.tokens > 0 or h.message_count > 0 for h in data.today_hourly
+        ):
+            console.print(make_today_hourly_chart(data.today_hourly))
+            console.print()
 
         # Projects
         console.print(make_projects_table(data))

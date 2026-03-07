@@ -34,6 +34,13 @@ class DeviceProject(BaseModel):
     last_seen: str | None = None
 
 
+class DeviceHourlyUsage(BaseModel):
+    hour: int
+    message_count: int
+    session_count: int
+    tokens: int
+
+
 class SyncPayload(BaseModel):
     """Data pushed from a device to the server."""
     hostname: str
@@ -47,6 +54,7 @@ class SyncPayload(BaseModel):
     model_usage: list[DeviceModelUsage] = []
     projects: list[DeviceProject] = []
     hour_counts: dict[str, int] = {}
+    today_hourly: list[DeviceHourlyUsage] = []
     total_sessions: int = 0
     total_messages: int = 0
     first_session_date: str | None = None
