@@ -38,6 +38,7 @@ class SyncPayload(BaseModel):
     """Data pushed from a device to the server."""
     hostname: str
     synced_at: str
+    email: str | None = None
     daily_activity: list[DeviceActivity] = []
     daily_model_tokens: list[DeviceModelTokens] = []
     model_usage: list[DeviceModelUsage] = []
@@ -50,6 +51,7 @@ class SyncPayload(BaseModel):
 
 class DeviceInfo(BaseModel):
     hostname: str
+    email: str | None = None
     last_synced: str
     total_sessions: int
     total_messages: int
