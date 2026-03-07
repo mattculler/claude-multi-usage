@@ -28,8 +28,10 @@ cmu models             # Usage by model
 cmu cost               # Monthly cost breakdown
 cmu dashboard -d 30    # Last 30 days
 cmu dashboard --from 2026-03-01 --to 2026-03-07   # Date range
-cmu dashboard --all    # All devices (via sync server)
-cmu config --show      # Show current configuration
+cmu diff               # All devices (per-device view, via sync server)
+cmu diff --merged      # All devices (merged into one view)
+cmu diff --key my-key  # Filter by specific key
+cmu config show        # Show current configuration
 ```
 
 `claude-multi-usage` also works as a command alias.
@@ -69,18 +71,23 @@ cmu server start --host 0.0.0.0 --port 8000
 ### Client Setup
 
 ```bash
-# Set server URL and email (once per device)
-cmu config --server https://your-server.com
-cmu config --email your@email.com
+# Set server URL and key (once per device)
+cmu config server https://your-server.com
+cmu config key add my-key "personal usage"
+
+# Set device alias (optional, for readable display names)
+cmu config alias macbook-air
 
 # Sync usage data
 cmu sync
 
-# View all your devices' usage (filtered by email)
-cmu dashboard --all
+# View all devices' usage
+cmu diff               # Per-device view
+cmu diff --merged      # Merged into one view
+cmu diff --key my-key  # Filter by specific key
 ```
 
-> Email is used to isolate data between users. Only devices with the same email can see each other's data. Local commands (`cmu dashboard`, `cmu today`, `cmu cost`, etc.) work without email.
+> Keys are used to group devices. Only devices with the same key can see each other's data. Local commands (`cmu dashboard`, `cmu today`, `cmu cost`, etc.) work without keys.
 
 ### Auto Sync
 
@@ -97,6 +104,8 @@ cc() {
 > The function name `cc` is just an example — you can use any name you prefer (e.g., `cl`, `claude-sync`). If you already have `alias cc="claude"` in your shell config, replace it with the function above and remove the alias line to avoid conflicts.
 
 ## Dashboard Preview
+
+### `cmu dashboard` (local)
 
 ```
 ── Claude Usage Dashboard  ──  my-macbook.local  ──  2026-03-07 ──
@@ -127,6 +136,36 @@ cc() {
 │  3. url-jarvis               17 sessions    42.1K out  2026-03-07 │
 ╰────────────────────────────────────────────────────────────────────╯
 ```
+
+### `cmu diff` (multi-device, per-device view)
+
+```
+── Claude Diff Dashboard  ──  2 devices  ──  2026-03-07 ──
+
+────────────── donghun (macbook-air.local) ──────────────────
+
+╭──── Summary ────╮  ╭──── Model Usage ────╮
+│  Hostname  ...  │  │  Model  Output  .. │
+│  Sessions  132  │  │  opus   780K    .. │
+╰─────────────────╯  ╰────────────────────╯
+
+╭──── Daily Tokens (last 14 days) ────╮
+│  03-03  ████████████████████  96.6K │
+╰─────────────────────────────────────╯
+╭──── Top Projects ───╮
+│  ...                 │
+╰──────────────────────╯
+
+──────────────────── office-desktop.local ───────────────────
+
+╭──── Summary ────╮  ╭──── Model Usage ────╮
+│  ...            │  │  ...                │
+╰─────────────────╯  ╰────────────────────╯
+╭──── Daily Tokens ───╮
+╭──── Top Projects ───╮
+```
+
+> Devices with an alias show as `alias (hostname)`. Devices without an alias show hostname only. Hourly heatmap is omitted in diff view (cumulative data is not synced).
 
 ## Cost Estimation
 
@@ -163,7 +202,8 @@ No API keys required. Local data stays local unless you opt in to sync.
 
 - [x] Multi-device sync via central server ([#2](https://github.com/hunknownn/claude-multi-usage/issues/2))
 - [x] Accurate cost estimation with incremental caching ([#5](https://github.com/hunknownn/claude-multi-usage/issues/5))
-- [x] Email-based user isolation for multi-device data ([#8](https://github.com/hunknownn/claude-multi-usage/issues/8))
+- [x] Key-based device grouping with alias support ([#8](https://github.com/hunknownn/claude-multi-usage/issues/8), [#11](https://github.com/hunknownn/claude-multi-usage/issues/11))
+- [x] `cmu diff` — multi-device per-device/merged view ([#11](https://github.com/hunknownn/claude-multi-usage/issues/11))
 - [x] Homebrew support
 - [ ] Web dashboard ([#3](https://github.com/hunknownn/claude-multi-usage/issues/3))
 

@@ -56,6 +56,7 @@ class ProjectSummary:
 @dataclass
 class UsageData:
     hostname: str
+    alias: str | None = None
     daily_activity: list[DailyActivity] = field(default_factory=list)
     daily_model_tokens: list[DailyModelTokens] = field(default_factory=list)
     model_usage: list[ModelUsage] = field(default_factory=list)

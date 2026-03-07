@@ -220,25 +220,33 @@ def render_dashboard(data: UsageData, days: int = 14,
     console.print()
 
 
+def _device_display_name(data: UsageData) -> str:
+    """Return display name: alias (hostname) or just hostname."""
+    if hasattr(data, "alias") and data.alias:
+        return f"{data.alias} ({data.hostname})"
+    return data.hostname
+
+
 def render_multi_device_dashboard(
     devices_data: list[UsageData],
     days: int = 14,
     date_from: str = None,
     date_to: str = None,
 ) -> None:
-    """Render separate dashboards per device."""
+    """Render separate dashboards per device (for diff view)."""
     console = Console()
     today = datetime.now().strftime("%Y-%m-%d")
 
     console.print()
-    console.rule(f"[bold blue]Claude Usage Dashboard  ──  {len(devices_data)} devices  ──  {today}[/bold blue]")
+    console.rule(f"[bold blue]Claude Diff Dashboard  ──  {len(devices_data)} devices  ──  {today}[/bold blue]")
     console.print()
 
     for i, data in enumerate(devices_data):
         if i > 0:
             console.print()
 
-        console.rule(f"[bold cyan]── {data.hostname} ──[/bold cyan]")
+        display_name = _device_display_name(data)
+        console.rule(f"[bold cyan]── {display_name} ──[/bold cyan]")
         console.print()
 
         # Summary + Models side by side
@@ -249,9 +257,7 @@ def render_multi_device_dashboard(
         console.print(make_daily_chart(data, days=days, date_from=date_from, date_to=date_to))
         console.print()
 
-        # Hourly heatmap
-        console.print(make_hourly_heatmap(data))
-        console.print()
+        # Hourly heatmap 생략 (diff에서는 누적 데이터 미제공)
 
         # Projects
         console.print(make_projects_table(data))
