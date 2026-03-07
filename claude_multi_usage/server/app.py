@@ -42,23 +42,29 @@ async def sync(payload: SyncPayload):
 
 @app.get("/api/devices", response_model=list[DeviceInfo])
 async def list_devices(
-    email: str | None = Query(None, description="Filter by email"),
+    key: str | None = Query(None, description="Filter by key"),
+    # backward compat
+    email: str | None = Query(None, description="(deprecated) Filter by email, use key instead"),
 ):
-    """List all registered devices, optionally filtered by email."""
-    return get_store().list_devices(email=email)
+    """List all registered devices, optionally filtered by key."""
+    filter_key = key or email
+    return get_store().list_devices(key=filter_key)
 
 
 @app.get("/api/usage")
 async def get_usage(
-    email: str | None = Query(None, description="Filter by email"),
+    key: str | None = Query(None, description="Filter by key"),
     hostname: str | None = Query(None, description="Filter by hostname"),
+    # backward compat
+    email: str | None = Query(None, description="(deprecated) Filter by email, use key instead"),
 ):
-    """Get aggregated usage data, filtered by email or hostname."""
+    """Get usage data, filtered by key or hostname."""
     store = get_store()
     if hostname:
         data = store.get_device_data(hostname)
         return [data] if data else []
-    return store.get_all_data(email=email)
+    filter_key = key or email
+    return store.get_all_data(key=filter_key)
 
 
 @app.get("/api/health")

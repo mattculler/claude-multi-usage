@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.columns import Columns
+from rich.rule import Rule
 
 from .parser import UsageData
 from .pricing import format_cost
@@ -55,7 +56,6 @@ def make_daily_chart(data: UsageData, days: int = 14,
     act_map = {a.date: a for a in data.daily_activity}
     token_map = {dt.date: dt.total_tokens for dt in data.daily_model_tokens}
 
-    # 날짜 범위 결정
     if date_from and date_to:
         start = datetime.strptime(date_from, "%Y-%m-%d")
         end = datetime.strptime(date_to, "%Y-%m-%d")
@@ -75,7 +75,6 @@ def make_daily_chart(data: UsageData, days: int = 14,
         start = end - timedelta(days=days - 1)
         title = f"Daily Tokens (last {days} days)"
 
-    # 날짜 범위를 채워서 빈 날도 표시
     all_dates = []
     max_tokens = 1
     current = start
@@ -133,7 +132,6 @@ def make_hourly_heatmap(data: UsageData) -> Panel:
 
     table.add_row(*cells)
 
-    # 수치 행
     count_cells = []
     for h in range(24):
         count = data.hour_counts.get(h, 0)
@@ -220,3 +218,41 @@ def render_dashboard(data: UsageData, days: int = 14,
     # Projects
     console.print(make_projects_table(data))
     console.print()
+
+
+def render_multi_device_dashboard(
+    devices_data: list[UsageData],
+    days: int = 14,
+    date_from: str = None,
+    date_to: str = None,
+) -> None:
+    """Render separate dashboards per device."""
+    console = Console()
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    console.print()
+    console.rule(f"[bold blue]Claude Usage Dashboard  ──  {len(devices_data)} devices  ──  {today}[/bold blue]")
+    console.print()
+
+    for i, data in enumerate(devices_data):
+        if i > 0:
+            console.print()
+
+        console.rule(f"[bold cyan]── {data.hostname} ──[/bold cyan]")
+        console.print()
+
+        # Summary + Models side by side
+        console.print(Columns([make_summary_panel(data), make_models_table(data)], equal=True))
+        console.print()
+
+        # Daily chart
+        console.print(make_daily_chart(data, days=days, date_from=date_from, date_to=date_to))
+        console.print()
+
+        # Hourly heatmap
+        console.print(make_hourly_heatmap(data))
+        console.print()
+
+        # Projects
+        console.print(make_projects_table(data))
+        console.print()
