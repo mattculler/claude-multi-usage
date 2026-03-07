@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cmu-server-ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: api-cmu.gold-grit.com
+      http:
+        paths:
+          - backend:
+              service:
+                name: cmu-server
+                port:
+                  number: 8000
+            path: /
+            pathType: Prefix
+  tls:
+    - hosts:
+        - api-cmu.gold-grit.com
+      secretName: cmu-server-tls
