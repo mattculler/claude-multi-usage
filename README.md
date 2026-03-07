@@ -21,6 +21,7 @@ cmu projects           # Usage by project
 cmu models             # Usage by model
 cmu cost               # Monthly cost breakdown
 cmu dashboard -d 30    # Last 30 days
+cmu dashboard --all    # All devices (via sync server)
 ```
 
 `claude-multi-usage` also works as a command alias.
@@ -57,6 +58,9 @@ cmu config --server https://your-server.com
 
 # Sync usage data
 cmu sync
+
+# View all devices' usage
+cmu dashboard --all
 ```
 
 ### Auto Sync
