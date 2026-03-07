@@ -62,6 +62,7 @@ class ProjectSummary:
     input_tokens: int = 0
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
+    cost: float = 0.0
 
 
 @dataclass
@@ -108,11 +109,14 @@ def _deduplicate_project_name(name: str) -> str:
     return name
 
 
-def _parse_session_tokens(session_file: Path) -> tuple:
-    """Parse a session jsonl file and return (output_tokens, input_tokens, timestamps)."""
+def _parse_session_tokens(session_file: Path, calc_cost: bool = False) -> tuple:
+    """Parse a session jsonl file and return (output_tokens, input_tokens, timestamps, cost)."""
+    from .pricing import calculate_model_cost
+
     output_tokens = 0
     input_tokens = 0
     timestamps = []
+    cost = 0.0
     try:
         with open(session_file) as f:
             for line in f:
@@ -122,23 +126,31 @@ def _parse_session_tokens(session_file: Path) -> tuple:
                     continue
                 if d.get("type") == "assistant":
                     usage = d.get("message", {}).get("usage", {})
-                    output_tokens += usage.get("output_tokens", 0)
-                    input_tokens += usage.get("input_tokens", 0)
-                    input_tokens += usage.get("cache_read_input_tokens", 0)
-                    input_tokens += usage.get("cache_creation_input_tokens", 0)
+                    out = usage.get("output_tokens", 0)
+                    inp = usage.get("input_tokens", 0)
+                    cache_read = usage.get("cache_read_input_tokens", 0)
+                    cache_create = usage.get("cache_creation_input_tokens", 0)
+                    output_tokens += out
+                    input_tokens += inp + cache_read + cache_create
+                    if calc_cost:
+                        model = d.get("message", {}).get("model", "")
+                        cost += calculate_model_cost(model, inp, out, cache_read, cache_create)
                 ts = d.get("timestamp")
                 if ts:
                     timestamps.append(ts)
     except (OSError, IOError):
         pass
-    return output_tokens, input_tokens, timestamps
+    return output_tokens, input_tokens, timestamps, cost
 
 
 def parse_projects(with_tokens: bool = True) -> list:
     """Parse project directories to get project summaries."""
+    from .pricing import get_pricing
+
     if not PROJECTS_DIR.exists():
         return []
 
+    has_pricing = get_pricing() is not None
     projects = []
     for project_dir in sorted(PROJECTS_DIR.iterdir()):
         if not project_dir.is_dir():
@@ -166,13 +178,15 @@ def parse_projects(with_tokens: bool = True) -> list:
 
         total_output = 0
         total_input = 0
+        total_cost = 0.0
         all_timestamps = []
 
         if with_tokens:
             for sf in session_files:
-                out_t, in_t, ts_list = _parse_session_tokens(sf)
+                out_t, in_t, ts_list, sf_cost = _parse_session_tokens(sf, calc_cost=has_pricing)
                 total_output += out_t
                 total_input += in_t
+                total_cost += sf_cost
                 all_timestamps.extend(ts_list)
 
         first_seen = None
@@ -196,6 +210,7 @@ def parse_projects(with_tokens: bool = True) -> list:
             input_tokens=total_input,
             first_seen=first_seen,
             last_seen=last_seen,
+            cost=total_cost,
         ))
 
     return sorted(projects, key=lambda p: p.output_tokens, reverse=True)
@@ -207,13 +222,17 @@ class HourlyUsage:
     message_count: int
     session_count: int
     tokens: int
+    cost: float = 0.0
 
 
 def parse_today_hourly() -> list[HourlyUsage]:
     """Parse today's usage broken down by hour (0-23)."""
+    from .pricing import calculate_model_cost, get_pricing
+
     today_str = datetime.now().strftime("%Y-%m-%d")
-    # hour -> {messages, sessions, tokens}
-    hourly: dict[int, dict] = {h: {"messages": 0, "sessions": set(), "tokens": 0} for h in range(24)}
+    has_pricing = get_pricing() is not None
+    # hour -> {messages, sessions, tokens, cost}
+    hourly: dict[int, dict] = {h: {"messages": 0, "sessions": set(), "tokens": 0, "cost": 0.0} for h in range(24)}
 
     if not PROJECTS_DIR.exists():
         return []
@@ -241,9 +260,18 @@ def parse_today_hourly() -> list[HourlyUsage]:
                             hourly[hour]["sessions"].add(str(session_file))
                         elif msg_type == "assistant":
                             hourly[hour]["messages"] += 1
-                            usage = d.get("message", {}).get("usage", {})
-                            hourly[hour]["tokens"] += usage.get("output_tokens", 0)
                             hourly[hour]["sessions"].add(str(session_file))
+                            usage = d.get("message", {}).get("usage", {})
+                            out = usage.get("output_tokens", 0)
+                            hourly[hour]["tokens"] += out
+                            if has_pricing:
+                                inp = usage.get("input_tokens", 0)
+                                cache_read = usage.get("cache_read_input_tokens", 0)
+                                cache_create = usage.get("cache_creation_input_tokens", 0)
+                                model = d.get("message", {}).get("model", "")
+                                hourly[hour]["cost"] += calculate_model_cost(
+                                    model, inp, out, cache_read, cache_create
+                                )
             except (OSError, IOError):
                 continue
 
@@ -253,6 +281,7 @@ def parse_today_hourly() -> list[HourlyUsage]:
             message_count=info["messages"],
             session_count=len(info["sessions"]),
             tokens=info["tokens"],
+            cost=info["cost"],
         )
         for h, info in sorted(hourly.items())
     ]
