@@ -94,6 +94,8 @@ cc() {
 }
 ```
 
+> The function name `cc` is just an example — you can use any name you prefer (e.g., `cl`, `claude-sync`). If you already have `alias cc="claude"` in your shell config, replace it with the function above and remove the alias line to avoid conflicts.
+
 ## Dashboard Preview
 
 ```
