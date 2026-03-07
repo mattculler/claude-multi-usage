@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: cmu-server
-          image: ghcr.io/hunknownn/claude-multi-usage:0.6.0
+          image: ghcr.io/hunknownn/claude-multi-usage
           ports:
             - containerPort: 8000
           volumeMounts:

@@ -1,0 +1,9 @@
+resources:
+  - deployment.yaml
+  - service.yaml
+  - pvc.yaml
+  - ingress.yaml
+
+images:
+  - name: ghcr.io/hunknownn/claude-multi-usage
+    newTag: "0.6.0"
