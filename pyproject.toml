@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "claude-multi-usage"
+version = "0.1.0"
+description = "Claude Code usage dashboard across multiple devices"
+requires-python = ">=3.9"
+dependencies = [
+    "rich>=13.0",
+    "click>=8.0",
+]
+
+[project.scripts]
+claude-usage = "claude_multi_usage.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
