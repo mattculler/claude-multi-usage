@@ -13,6 +13,144 @@ from .pricing import format_cost
 CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
 
 
+def _fetch_all_usage():
+    """Fetch aggregated usage data from all devices via the sync server."""
+    import json
+    import urllib.request
+    import urllib.error
+    from .config import get_server_url
+    from .parser import UsageData, DailyActivity, DailyModelTokens, ModelUsage, ProjectSummary
+    from datetime import datetime
+
+    console = Console()
+    server_url = get_server_url()
+
+    if not server_url:
+        console.print("[red]Server URL not configured.[/red]")
+        console.print("Run: cmu config --server <url>")
+        raise SystemExit(1)
+
+    try:
+        req = urllib.request.Request(f"{server_url}/api/usage")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            devices = json.loads(resp.read())
+    except urllib.error.URLError as e:
+        console.print(f"[red]Failed to fetch from server:[/red] {e}")
+        raise SystemExit(1)
+
+    if not devices:
+        console.print("[dim]No device data on server.[/dim]")
+        raise SystemExit(0)
+
+    # 모든 기기 데이터를 합산
+    all_activity: dict[str, DailyActivity] = {}
+    all_tokens: dict[str, dict[str, int]] = {}
+    all_model_usage: dict[str, list[int]] = {}  # model -> [in, out, cache_read, cache_create]
+    all_projects: dict[str, list] = {}  # name -> [sessions, out, in, first, last]
+    all_hour_counts: dict[int, int] = {}
+    total_sessions = 0
+    total_messages = 0
+    hostnames = []
+    first_dates = []
+
+    for device in devices:
+        hostnames.append(device["hostname"])
+        total_sessions += device.get("total_sessions", 0)
+        total_messages += device.get("total_messages", 0)
+        if device.get("first_session_date"):
+            first_dates.append(device["first_session_date"])
+
+        for a in device.get("daily_activity", []):
+            d = a["date"]
+            if d in all_activity:
+                existing = all_activity[d]
+                all_activity[d] = DailyActivity(
+                    date=d,
+                    message_count=existing.message_count + a["message_count"],
+                    session_count=existing.session_count + a["session_count"],
+                    tool_call_count=existing.tool_call_count + a["tool_call_count"],
+                )
+            else:
+                all_activity[d] = DailyActivity(
+                    date=d,
+                    message_count=a["message_count"],
+                    session_count=a["session_count"],
+                    tool_call_count=a["tool_call_count"],
+                )
+
+        for t in device.get("daily_model_tokens", []):
+            d = t["date"]
+            if d not in all_tokens:
+                all_tokens[d] = {}
+            for model, count in t["tokens_by_model"].items():
+                all_tokens[d][model] = all_tokens[d].get(model, 0) + count
+
+        for m in device.get("model_usage", []):
+            model = m["model"]
+            if model not in all_model_usage:
+                all_model_usage[model] = [0, 0, 0, 0]
+            all_model_usage[model][0] += m["input_tokens"]
+            all_model_usage[model][1] += m["output_tokens"]
+            all_model_usage[model][2] += m["cache_read_tokens"]
+            all_model_usage[model][3] += m["cache_creation_tokens"]
+
+        for p in device.get("projects", []):
+            name = p["name"]
+            if name not in all_projects:
+                all_projects[name] = [0, 0, 0, None, None]
+            all_projects[name][0] += p["session_count"]
+            all_projects[name][1] += p.get("output_tokens", 0)
+            all_projects[name][2] += p.get("input_tokens", 0)
+            fs = p.get("first_seen")
+            ls = p.get("last_seen")
+            if fs:
+                cur_first = all_projects[name][3]
+                if cur_first is None or fs < cur_first:
+                    all_projects[name][3] = fs
+            if ls:
+                cur_last = all_projects[name][4]
+                if cur_last is None or ls > cur_last:
+                    all_projects[name][4] = ls
+
+        for h_str, count in device.get("hour_counts", {}).items():
+            h = int(h_str)
+            all_hour_counts[h] = all_hour_counts.get(h, 0) + count
+
+    def _parse_dt(s):
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return None
+
+    hostname_label = " + ".join(sorted(hostnames)) if len(hostnames) <= 3 else f"{len(hostnames)} devices"
+
+    return UsageData(
+        hostname=hostname_label,
+        daily_activity=sorted(all_activity.values(), key=lambda a: a.date),
+        daily_model_tokens=[
+            DailyModelTokens(date=d, tokens_by_model=t)
+            for d, t in sorted(all_tokens.items())
+        ],
+        model_usage=[
+            ModelUsage(model=m, input_tokens=v[0], output_tokens=v[1],
+                       cache_read_tokens=v[2], cache_creation_tokens=v[3])
+            for m, v in all_model_usage.items()
+        ],
+        projects=sorted([
+            ProjectSummary(name=n, session_count=v[0], output_tokens=v[1],
+                           input_tokens=v[2], first_seen=_parse_dt(v[3]),
+                           last_seen=_parse_dt(v[4]))
+            for n, v in all_projects.items()
+        ], key=lambda p: p.output_tokens, reverse=True),
+        hour_counts=all_hour_counts,
+        total_sessions=total_sessions,
+        total_messages=total_messages,
+        first_session_date=min(first_dates) if first_dates else None,
+    )
+
+
 @click.group(invoke_without_command=True, context_settings=CONTEXT_SETTINGS)
 @click.version_option(package_name="claude-multi-usage")
 @click.pass_context
@@ -30,6 +168,7 @@ def main(ctx):
       cmu dashboard -d 7         Last 7 days
       cmu dashboard -d 30        Last 30 days
       cmu dashboard --from 2026-03-01 --to 2026-03-07    Date range
+      cmu dashboard --all            All devices (via sync server)
 
     \b
     Data source:
@@ -47,7 +186,9 @@ def main(ctx):
               help="Start date for the chart range.")
 @click.option("--to", "date_to", default=None, metavar="YYYY-MM-DD",
               help="End date for the chart range.")
-def dashboard(days: int, date_from: str, date_to: str):
+@click.option("--all", "show_all", is_flag=True,
+              help="Show aggregated data from all devices via the sync server.")
+def dashboard(days: int, date_from: str, date_to: str, show_all: bool):
     """Show the full usage dashboard.
 
     \b
@@ -59,12 +200,16 @@ def dashboard(days: int, date_from: str, date_to: str):
       cmu dashboard --from 2026-02-01                     From date to now
       cmu dashboard --from 2026-02-01 --to 2026-02-28     Specific range
       cmu dashboard --to 2026-02-28                       14 days ending at date
+      cmu dashboard --all                                 All devices (via server)
 
     \b
     Includes: summary, model usage, daily token chart,
     hourly heatmap, and top projects.
     """
-    data = load_usage_data()
+    if show_all:
+        data = _fetch_all_usage()
+    else:
+        data = load_usage_data()
     render_dashboard(data, days=days, date_from=date_from, date_to=date_to)
 
 
