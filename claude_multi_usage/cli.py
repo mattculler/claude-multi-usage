@@ -39,7 +39,7 @@ def _fetch_all_usage():
 
     try:
         params = urllib.parse.urlencode({"email": email})
-        req = urllib.request.Request(f"{server_url}/api/usage?{params}")
+        req = urllib.request.Request(f"{server_url}/api/usage?{params}", headers={"User-Agent": "cmu"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             devices = json.loads(resp.read())
     except urllib.error.URLError as e:
@@ -479,7 +479,7 @@ def sync(quiet: bool):
     req = urllib.request.Request(
         f"{server_url}/api/sync",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "User-Agent": "cmu"},
         method="POST",
     )
 
