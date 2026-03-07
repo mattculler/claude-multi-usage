@@ -2,7 +2,7 @@
 
 CLI dashboard for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) usage tracking across multiple devices.
 
-Parses local `~/.claude` data and displays usage stats in your terminal — sessions, tokens, projects, models, and more.
+Parses local `~/.claude` data and displays usage stats in your terminal — sessions, tokens, projects, models, and more. Supports multi-device sync via a central server.
 
 ## Install
 
@@ -19,10 +19,57 @@ cmu                    # Full dashboard
 cmu today              # Today's usage
 cmu projects           # Usage by project
 cmu models             # Usage by model
+cmu cost               # Monthly cost breakdown
 cmu dashboard -d 30    # Last 30 days
 ```
 
 `claude-multi-usage` also works as a command alias.
+
+## Multi-Device Sync
+
+Collect usage data from multiple machines into a central server.
+
+### Server Setup
+
+Choose one of the following:
+
+**Docker (recommended)**
+```bash
+docker run -d -p 8000:8000 -v cmu-data:/data ghcr.io/hunknownn/claude-multi-usage:latest
+```
+
+**Kubernetes**
+```bash
+kubectl apply -f deploy/k8s/
+```
+
+**pip**
+```bash
+pip install claude-multi-usage[server]
+cmu server start --host 0.0.0.0 --port 8000
+```
+
+### Client Setup
+
+```bash
+# Set server URL (once)
+cmu config --server https://your-server.com
+
+# Sync usage data
+cmu sync
+```
+
+### Auto Sync
+
+Add to `~/.zshrc` to sync automatically when using Claude:
+
+```bash
+cc() {
+    cmu sync --quiet &>/dev/null &
+    command claude "$@"
+    cmu sync --quiet &>/dev/null &
+}
+```
 
 ## Dashboard Preview
 
@@ -34,6 +81,7 @@ cmu dashboard -d 30    # Last 30 days
 │  Total Sessions 132             │  │  claude-opus-4-6  780K   519M   │
 │  Total Messages 35,330          │  │  claude-sonnet    867K   424M   │
 │  Output Tokens  1.6M            │  ╰─────────────────────────────────╯
+│  Estimated Cost $1,548         │
 ╰─────────────────────────────────╯
 
 ╭──────────────── Daily Tokens (last 14 days) ─────────────────╮
@@ -54,17 +102,36 @@ cmu dashboard -d 30    # Last 30 days
 ╰──────────────────────────────────────────────────────────────╯
 ```
 
+## Cost Estimation
+
+Calculates estimated API costs based on Anthropic pricing. Past days are cached for instant loading, today is calculated in realtime.
+
+```
+╭──────────── Cost Breakdown (by month) ────────────╮
+│  Month    Model                   Cost             │
+│  2026-02  claude-opus-4-6    $1,317.20             │
+│           claude-sonnet-4-5    $126.54             │
+│           subtotal           $1,443.74             │
+│                                                    │
+│  2026-03  claude-opus-4-6      $104.56             │
+│           subtotal             $104.56             │
+│                                                    │
+│  Total                       $1,548.29             │
+╰────────────────────────────────────────────────────╯
+```
+
 ## How It Works
 
 Reads local Claude Code data from `~/.claude/`:
 - `stats-cache.json` — daily activity, model tokens, hourly counts
 - `projects/` — session files per project
 
-No API keys or network access required. All data stays local.
+No API keys required. Local data stays local unless you opt in to sync.
 
 ## Roadmap
 
-- [ ] Multi-device sync via central server ([#2](https://github.com/hunknownn/claude-multi-usage/issues/2))
+- [x] Multi-device sync via central server ([#2](https://github.com/hunknownn/claude-multi-usage/issues/2))
+- [x] Accurate cost estimation with incremental caching ([#5](https://github.com/hunknownn/claude-multi-usage/issues/5))
 - [ ] Web dashboard ([#3](https://github.com/hunknownn/claude-multi-usage/issues/3))
 - [ ] Homebrew support
 

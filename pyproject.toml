@@ -30,6 +30,12 @@ dependencies = [
     "click>=8.0",
 ]
 
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
 [project.urls]
 Homepage = "https://github.com/hunknownn/claude-multi-usage"
 Repository = "https://github.com/hunknownn/claude-multi-usage"

@@ -6,6 +6,8 @@ import click
 
 from .parser import load_usage_data, parse_today_usage
 from .dashboard import render_dashboard, make_projects_table, make_models_table, Console, format_tokens
+from .cost_cache import get_costs
+from .pricing import format_cost
 
 
 CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
@@ -24,6 +26,7 @@ def main(ctx):
       cmu projects               Project breakdown with token usage
       cmu projects -n 5          Top 5 projects only
       cmu models                 Model usage breakdown
+      cmu cost                   Monthly cost breakdown
       cmu dashboard -d 7         Last 7 days
       cmu dashboard -d 30        Last 30 days
       cmu dashboard --from 2026-03-01 --to 2026-03-07    Date range
@@ -148,6 +151,211 @@ def models():
     console.print()
     console.print(make_models_table(data))
     console.print()
+
+
+@main.command(context_settings=CONTEXT_SETTINGS)
+def cost():
+    """Show monthly cost breakdown.
+
+    \b
+    Calculates accurate costs by parsing session files with
+    incremental caching. Past days are cached (fixed),
+    today is calculated in realtime.
+
+    \b
+    Uses Anthropic API pricing per model:
+      opus:   $15/M input, $75/M output
+      sonnet: $3/M input, $15/M output
+      haiku:  $0.80/M input, $4/M output
+    """
+    from collections import defaultdict
+    from rich.table import Table
+    from rich.panel import Panel
+
+    console = Console()
+    daily_costs, total_cost, today_cost = get_costs()
+
+    # 월별 집계
+    monthly = defaultdict(lambda: defaultdict(float))
+    for date_str, models in sorted(daily_costs.items()):
+        month = date_str[:7]  # YYYY-MM
+        for model, info in models.items():
+            short = model.split("-202")[0] if "-202" in model else model
+            monthly[month][short] += info["cost"]
+
+    table = Table(box=None, padding=(0, 1))
+    table.add_column("Month", style="bold")
+    table.add_column("Model", style="dim")
+    table.add_column("Cost", justify="right", style="bold yellow")
+
+    for month in sorted(monthly.keys()):
+        models = monthly[month]
+        first = True
+        month_total = sum(models.values())
+        for model in sorted(models.keys(), key=lambda m: models[m], reverse=True):
+            table.add_row(
+                month if first else "",
+                model,
+                format_cost(models[model]),
+            )
+            first = False
+        table.add_row("", "[bold]subtotal[/bold]", f"[bold]{format_cost(month_total)}[/bold]")
+        table.add_row("", "", "")
+
+    table.add_row("[bold]Total[/bold]", "", f"[bold yellow]{format_cost(total_cost)}[/bold yellow]")
+
+    console.print()
+    console.print(Panel(table, title="Cost Breakdown (by month)", border_style="yellow"))
+    console.print()
+
+
+@main.command(context_settings=CONTEXT_SETTINGS)
+@click.option("--server", "server_url", default=None, metavar="URL",
+              help="Set the sync server URL.")
+@click.option("--show", is_flag=True, help="Show current configuration.")
+def config(server_url: str, show: bool):
+    """Configure claude-multi-usage settings.
+
+    \b
+    Examples:
+      cmu config --server https://your-server.com
+      cmu config --show
+    """
+    from .config import get_server_url, set_server_url, load_config
+
+    console = Console()
+
+    if server_url:
+        set_server_url(server_url)
+        console.print(f"[green]Server URL set to:[/green] {server_url}")
+        return
+
+    cfg = load_config()
+    console.print()
+    console.print("[bold]Current configuration:[/bold]")
+    console.print(f"  server_url: {cfg.get('server_url') or '[dim]not set[/dim]'}")
+    console.print()
+
+
+@main.command(context_settings=CONTEXT_SETTINGS)
+@click.option("--quiet", "-q", is_flag=True, help="Suppress output.")
+def sync(quiet: bool):
+    """Sync local usage data to the central server.
+
+    \b
+    Pushes all local Claude Code usage data to the configured server.
+    Set the server URL first with: cmu config --server <url>
+
+    \b
+    Examples:
+      cmu sync
+      cmu sync --quiet
+    """
+    import json
+    import urllib.request
+    import urllib.error
+    from datetime import datetime
+    from .config import get_server_url
+
+    console = Console()
+    server_url = get_server_url()
+
+    if not server_url:
+        if not quiet:
+            console.print("[red]Server URL not configured.[/red]")
+            console.print("Run: cmu config --server <url>")
+        raise SystemExit(1)
+
+    data = load_usage_data()
+
+    payload = {
+        "hostname": data.hostname,
+        "synced_at": datetime.now().isoformat(),
+        "daily_activity": [
+            {"date": a.date, "message_count": a.message_count,
+             "session_count": a.session_count, "tool_call_count": a.tool_call_count}
+            for a in data.daily_activity
+        ],
+        "daily_model_tokens": [
+            {"date": t.date, "tokens_by_model": t.tokens_by_model}
+            for t in data.daily_model_tokens
+        ],
+        "model_usage": [
+            {"model": m.model, "input_tokens": m.input_tokens,
+             "output_tokens": m.output_tokens, "cache_read_tokens": m.cache_read_tokens,
+             "cache_creation_tokens": m.cache_creation_tokens}
+            for m in data.model_usage
+        ],
+        "projects": [
+            {"name": p.name, "session_count": p.session_count,
+             "output_tokens": p.output_tokens, "input_tokens": p.input_tokens,
+             "first_seen": p.first_seen.isoformat() if p.first_seen else None,
+             "last_seen": p.last_seen.isoformat() if p.last_seen else None}
+            for p in data.projects
+        ],
+        "hour_counts": {str(k): v for k, v in data.hour_counts.items()},
+        "total_sessions": data.total_sessions,
+        "total_messages": data.total_messages,
+        "first_session_date": data.first_session_date,
+    }
+
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{server_url}/api/sync",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            json.loads(resp.read())
+            if not quiet:
+                console.print(f"[green]Synced to {server_url}[/green] ({data.hostname})")
+    except urllib.error.URLError as e:
+        if not quiet:
+            console.print(f"[red]Sync failed:[/red] {e}")
+        raise SystemExit(1)
+
+
+@main.command(name="server", context_settings=CONTEXT_SETTINGS)
+@click.argument("action", type=click.Choice(["start"]))
+@click.option("--host", default="0.0.0.0", show_default=True, help="Bind host.")
+@click.option("--port", "-p", default=8000, show_default=True, help="Bind port.")
+@click.option("--db-path", default=None, metavar="PATH",
+              help="SQLite database path (default: /data/server.db).")
+def server_cmd(action: str, host: str, port: int, db_path: str):
+    """Start the sync collection server.
+
+    \b
+    Requires server extras: pip install claude-multi-usage[server]
+
+    \b
+    Examples:
+      cmu server start
+      cmu server start --host 0.0.0.0 --port 8000
+      cmu server start --db-path ./data/server.db
+    """
+    if action == "start":
+        try:
+            import uvicorn
+        except ImportError:
+            click.echo(
+                "Server dependencies not installed.\n"
+                "Run: pip install claude-multi-usage[server]",
+                err=True,
+            )
+            raise SystemExit(1)
+
+        import os
+        if db_path:
+            os.environ["CMU_DB_PATH"] = db_path
+
+        uvicorn.run(
+            "claude_multi_usage.server.app:app",
+            host=host,
+            port=port,
+        )
 
 
 if __name__ == "__main__":

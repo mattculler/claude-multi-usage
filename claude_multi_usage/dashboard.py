@@ -10,7 +10,8 @@ from rich.table import Table
 from rich.columns import Columns
 
 from .parser import UsageData
-from .pricing import calculate_model_cost, format_cost
+from .pricing import format_cost
+from .cost_cache import get_costs
 
 
 def format_tokens(n: int) -> str:
@@ -38,11 +39,7 @@ def make_summary_panel(data: UsageData) -> Panel:
     total_output = sum(m.output_tokens for m in data.model_usage)
     table.add_row("Total Output Tokens", format_tokens(total_output))
 
-    total_cost = sum(
-        calculate_model_cost(m.model, m.input_tokens, m.output_tokens,
-                             m.cache_read_tokens, m.cache_creation_tokens)
-        for m in data.model_usage
-    )
+    _, total_cost, _ = get_costs()
     table.add_row("Estimated Cost", f"[bold yellow]{format_cost(total_cost)}[/bold yellow]")
 
     return Panel(table, title="Summary", border_style="blue")
@@ -160,7 +157,16 @@ def make_projects_table(data: UsageData, limit: int = 10) -> Panel:
 
 
 def make_models_table(data: UsageData) -> Panel:
-    """Model usage breakdown."""
+    """Model usage breakdown with costs from cache."""
+    daily_costs, _, _ = get_costs()
+
+    # 모델별 비용 합산
+    model_costs = {}
+    for models in daily_costs.values():
+        for model, info in models.items():
+            short = model.split("-202")[0] if "-202" in model else model
+            model_costs[short] = model_costs.get(short, 0.0) + info["cost"]
+
     table = Table(box=None, padding=(0, 1))
     table.add_column("Model", style="bold")
     table.add_column("Output", justify="right", style="cyan")
@@ -170,10 +176,7 @@ def make_models_table(data: UsageData) -> Panel:
 
     for m in sorted(data.model_usage, key=lambda x: x.output_tokens, reverse=True):
         short_name = m.model.split("-202")[0] if "-202" in m.model else m.model
-        cost = calculate_model_cost(
-            m.model, m.input_tokens, m.output_tokens,
-            m.cache_read_tokens, m.cache_creation_tokens,
-        )
+        cost = model_costs.get(short_name, 0.0)
         table.add_row(
             short_name,
             format_tokens(m.output_tokens),
