@@ -20,13 +20,16 @@ pipx install claude-multi-usage
 ## Usage
 
 ```bash
-cmu                    # Full dashboard
-cmu today              # Today's usage
-cmu projects           # Usage by project
+cmu                    # Full dashboard (last 14 days)
+cmu today              # Today's realtime usage
+cmu projects           # Usage by project (sorted by output tokens)
+cmu projects -n 5      # Top 5 projects only
 cmu models             # Usage by model
 cmu cost               # Monthly cost breakdown
 cmu dashboard -d 30    # Last 30 days
+cmu dashboard --from 2026-03-01 --to 2026-03-07   # Date range
 cmu dashboard --all    # All devices (via sync server)
+cmu config --show      # Show current configuration
 ```
 
 `claude-multi-usage` also works as a command alias.
@@ -96,12 +99,13 @@ cc() {
 ```
 ── Claude Usage Dashboard  ──  my-macbook.local  ──  2026-03-07 ──
 
-╭──────────── Summary ────────────╮  ╭────────── Model Usage ──────────╮
-│  Hostname       my-macbook      │  │  Model           Output  Cache  │
-│  Total Sessions 132             │  │  claude-opus-4-6  780K   519M   │
-│  Total Messages 35,330          │  │  claude-sonnet    867K   424M   │
-│  Output Tokens  1.6M            │  ╰─────────────────────────────────╯
-│  Estimated Cost $1,548         │
+╭──────────── Summary ────────────╮  ╭──────────── Model Usage ─────────────────────╮
+│  Hostname       my-macbook      │  │  Model            Output  Cache Read  Cost   │
+│  Total Sessions 132             │  │  claude-opus-4-6   780K     519M    $1,200   │
+│  Total Messages 35,330          │  │  claude-sonnet     867K     424M      $348   │
+│  First Session  2026-01-15      │  ╰──────────────────────────────────────────────╯
+│  Output Tokens  1.6M            │
+│  Estimated Cost $1,548          │
 ╰─────────────────────────────────╯
 
 ╭──────────────── Daily Tokens (last 14 days) ─────────────────╮
@@ -115,11 +119,11 @@ cc() {
 │  ▒▒ ░░ ░░    ░░ ▒▒    ▓▓ ▒▒ ░░ ▒▒ ▓▓ ▓▓ ██ ▓▓               │
 ╰──────────────────────────────────────────────────────────────╯
 
-╭──────────────── Top Projects ────────────────────────────────╮
-│  1. apr-backend-assignment   45 sessions   2026-02-10       │
-│  2. wemade-assignment        23 sessions   2026-03-04       │
-│  3. url-jarvis               17 sessions   2026-03-07       │
-╰──────────────────────────────────────────────────────────────╯
+╭──────────────── Top Projects ──────────────────────────────────────╮
+│  1. apr-backend-assignment   45 sessions   120.5K out  2026-02-10 │
+│  2. wemade-assignment        23 sessions    85.2K out  2026-03-04 │
+│  3. url-jarvis               17 sessions    42.1K out  2026-03-07 │
+╰────────────────────────────────────────────────────────────────────╯
 ```
 
 ## Cost Estimation
@@ -158,8 +162,8 @@ No API keys required. Local data stays local unless you opt in to sync.
 - [x] Multi-device sync via central server ([#2](https://github.com/hunknownn/claude-multi-usage/issues/2))
 - [x] Accurate cost estimation with incremental caching ([#5](https://github.com/hunknownn/claude-multi-usage/issues/5))
 - [x] Email-based user isolation for multi-device data ([#8](https://github.com/hunknownn/claude-multi-usage/issues/8))
+- [x] Homebrew support
 - [ ] Web dashboard ([#3](https://github.com/hunknownn/claude-multi-usage/issues/3))
-- [ ] Homebrew support
 
 ## License
 
