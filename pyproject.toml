@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claude-multi-usage"
-version = "0.1.0"
+version = "0.1.1"
 description = "Claude Code usage dashboard across multiple devices"
 requires-python = ">=3.9"
 license = "MIT"
@@ -35,7 +35,8 @@ Repository = "https://github.com/hunknownn/claude-multi-usage"
 Issues = "https://github.com/hunknownn/claude-multi-usage/issues"
 
 [project.scripts]
-claude-usage = "claude_multi_usage.cli:main"
+cmu = "claude_multi_usage.cli:main"
+claude-multi-usage = "claude_multi_usage.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
