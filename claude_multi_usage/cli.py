@@ -8,27 +8,69 @@ from .parser import load_usage_data, parse_today_usage
 from .dashboard import render_dashboard, make_projects_table, make_models_table, Console, format_tokens
 
 
-@click.group(invoke_without_command=True)
+CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
+
+
+@click.group(invoke_without_command=True, context_settings=CONTEXT_SETTINGS)
+@click.version_option(package_name="claude-multi-usage")
 @click.pass_context
 def main(ctx):
-    """Claude Code usage dashboard across multiple devices."""
+    """Claude Code usage dashboard across multiple devices.
+
+    \b
+    Quick start:
+      cmu               Show full dashboard (default)
+      cmu today          Today's realtime usage
+      cmu projects       Project breakdown with token usage
+      cmu models         Model usage breakdown
+      cmu dashboard -d 30          Last 30 days
+      cmu dashboard --from 2026-03-01 --to 2026-03-07    Date range
+
+    \b
+    Data source:
+      Reads ~/.claude/stats-cache.json and session .jsonl files.
+      No API keys or network access required.
+    """
     if ctx.invoked_subcommand is None:
         ctx.invoke(dashboard)
 
 
-@main.command()
-@click.option("--days", "-d", default=14, help="Number of days to show in chart")
-@click.option("--from", "date_from", default=None, help="Start date (YYYY-MM-DD)")
-@click.option("--to", "date_to", default=None, help="End date (YYYY-MM-DD)")
+@main.command(context_settings=CONTEXT_SETTINGS)
+@click.option("--days", "-d", default=14, show_default=True,
+              help="Number of recent days to display in the chart.")
+@click.option("--from", "date_from", default=None, metavar="YYYY-MM-DD",
+              help="Start date for the chart range.")
+@click.option("--to", "date_to", default=None, metavar="YYYY-MM-DD",
+              help="End date for the chart range.")
 def dashboard(days: int, date_from: str, date_to: str):
-    """Show the full usage dashboard."""
+    """Show the full usage dashboard.
+
+    \b
+    Examples:
+      cmu dashboard                          Last 14 days (default)
+      cmu dashboard -d 30                    Last 30 days
+      cmu dashboard --from 2026-02-01        From date to now
+      cmu dashboard --from 2026-02-01 --to 2026-02-28    Specific range
+
+    \b
+    Includes: summary, model usage, daily token chart,
+    hourly heatmap, and top projects.
+    """
     data = load_usage_data()
     render_dashboard(data, days=days, date_from=date_from, date_to=date_to)
 
 
-@main.command()
+@main.command(context_settings=CONTEXT_SETTINGS)
 def today():
-    """Show today's usage (realtime, parsed from session files)."""
+    """Show today's usage in realtime.
+
+    \b
+    Parses session .jsonl files directly, so it works even
+    before stats-cache.json is updated by Claude Code.
+
+    \b
+    Shows: sessions, messages, tool calls, tokens by model.
+    """
     from datetime import datetime
     from rich.table import Table
     from rich.panel import Panel
@@ -71,19 +113,31 @@ def today():
     console.print()
 
 
-@main.command()
-def projects():
-    """Show project usage breakdown."""
+@main.command(context_settings=CONTEXT_SETTINGS)
+@click.option("--limit", "-n", default=20, show_default=True,
+              help="Number of projects to display.")
+def projects(limit: int):
+    """Show project usage breakdown sorted by output tokens.
+
+    \b
+    Parses all session .jsonl files to calculate per-project
+    token usage. Shows sessions, output tokens, and last used date.
+    """
     console = Console()
     data = load_usage_data()
     console.print()
-    console.print(make_projects_table(data, limit=20))
+    console.print(make_projects_table(data, limit=limit))
     console.print()
 
 
-@main.command()
+@main.command(context_settings=CONTEXT_SETTINGS)
 def models():
-    """Show model usage breakdown."""
+    """Show model usage breakdown.
+
+    \b
+    Displays output tokens, cache read, and cache creation
+    for each model (e.g., claude-opus-4-6, claude-sonnet-4-5).
+    """
     console = Console()
     data = load_usage_data()
     console.print()
