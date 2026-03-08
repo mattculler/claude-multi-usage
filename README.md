@@ -27,6 +27,7 @@ cmu projects           # Usage by project (sorted by output tokens)
 cmu projects -n 5      # Top 5 projects only
 cmu models             # Usage by model
 cmu cost               # Monthly cost breakdown
+cmu tree               # Grass/tree ASCII art visualization (daily/weekly/monthly/yearly)
 cmu dashboard -d 30    # Last 30 days
 cmu dashboard --from 2026-03-01 --to 2026-03-07   # Date range
 cmu diff               # All devices (per-device view, via sync server)
@@ -221,6 +222,7 @@ No API keys required. Local data stays local unless you opt in to sync.
 - [x] Key-based device grouping with alias support ([#8](https://github.com/hunknownn/claude-multi-usage/issues/8), [#11](https://github.com/hunknownn/claude-multi-usage/issues/11))
 - [x] `cmu diff` — multi-device per-device/merged view ([#11](https://github.com/hunknownn/claude-multi-usage/issues/11))
 - [x] `cmu hourly` — today's per-hour usage breakdown with sync support
+- [x] `cmu tree` — grass/tree ASCII art visualization ([#17](https://github.com/hunknownn/claude-multi-usage/issues/17))
 - [x] Homebrew support
 - [ ] Web dashboard ([#3](https://github.com/hunknownn/claude-multi-usage/issues/3))
 
