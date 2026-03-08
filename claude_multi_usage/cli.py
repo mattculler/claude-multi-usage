@@ -750,6 +750,117 @@ def sync(quiet: bool):
         raise SystemExit(1)
 
 
+@main.command(context_settings=CONTEXT_SETTINGS)
+def tree():
+    """Show usage as growing grass/tree ASCII art.
+
+    \b
+    Visualizes usage with a growth story:
+      - Daily: grass pots (8 three-hour blocks)
+      - Weekly: grass garden with fence (7 days)
+      - Monthly: forest with grass and trees (days of month)
+      - Yearly: ecosystem with trees and animals (12 months)
+
+    \b
+    Examples:
+      cmu tree
+    """
+    from datetime import datetime, timedelta
+    from .tree import (make_daily_grass, make_weekly_garden,
+                       make_monthly_forest, make_yearly_ecosystem)
+    from .parser import parse_today_hourly
+    from .cost_cache import _parse_sessions_for_date_range, get_costs
+    from .pricing import get_pricing
+
+    console = Console()
+    data = load_usage_data()
+    today = datetime.now()
+    today_str = today.strftime("%Y-%m-%d")
+
+    has_pricing = get_pricing() is not None
+    costs = get_costs()
+    daily_costs = costs[0] if costs else {}
+
+    # -- Daily (8 three-hour blocks) --
+    hourly = parse_today_hourly()
+    blocks: list[tuple[int, float, int]] = []
+    for blk in range(8):
+        start_h = blk * 3
+        blk_tokens = sum(h.tokens for h in hourly if start_h <= h.hour < start_h + 3)
+        blk_cost = sum(h.cost for h in hourly if start_h <= h.hour < start_h + 3)
+        blk_msgs = sum(h.message_count for h in hourly if start_h <= h.hour < start_h + 3)
+        blocks.append((blk_tokens, blk_cost, blk_msgs))
+
+    console.print()
+    console.print(make_daily_grass(blocks))
+    console.print()
+
+    # -- Weekly (Mon-Sun) --
+    tok_map = {t.date: t.total_tokens for t in data.daily_model_tokens}
+    today_tokens = sum(b[0] for b in blocks)
+    today_cost = sum(b[1] for b in blocks)
+
+    monday = today - timedelta(days=today.weekday())
+    weekly_data = []
+    for i in range(7):
+        d = (monday + timedelta(days=i)).strftime("%Y-%m-%d")
+        tokens = tok_map.get(d, 0)
+        if d == today_str:
+            tokens = today_tokens if today_tokens > 0 else tokens
+        day_cost = sum(info["cost"] for info in daily_costs.get(d, {}).values())
+        if d == today_str:
+            day_cost = today_cost
+        weekly_data.append((d, tokens, day_cost))
+
+    console.print(make_weekly_garden(weekly_data))
+    console.print()
+
+    # -- Monthly (days of current month) --
+    first_of_month = today.replace(day=1)
+    monthly_days = []
+    for day_num in range(1, today.day + 1):
+        d = today.replace(day=day_num).strftime("%Y-%m-%d")
+        tokens = tok_map.get(d, 0)
+        if d == today_str:
+            tokens = today_tokens if today_tokens > 0 else tokens
+        day_cost = sum(info["cost"] for info in daily_costs.get(d, {}).values())
+        if d == today_str:
+            day_cost = today_cost
+        monthly_days.append((day_num, tokens, day_cost))
+
+    console.print(make_monthly_forest(monthly_days))
+    console.print()
+
+    # -- Yearly (12 months) --
+    year = today.year
+    yearly_data = []
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    for m in range(1, 13):
+        month_prefix = f"{year}-{m:02d}"
+        month_tokens = sum(
+            t.total_tokens for t in data.daily_model_tokens
+            if t.date.startswith(month_prefix)
+        )
+        month_cost = sum(
+            sum(info["cost"] for info in models.values())
+            for date_str, models in daily_costs.items()
+            if date_str.startswith(month_prefix)
+        )
+        # 이번 달은 오늘 realtime 데이터 포함
+        if m == today.month:
+            today_in_stats = any(
+                t.date == today_str for t in data.daily_model_tokens
+            )
+            if not today_in_stats and today_tokens > 0:
+                month_tokens += today_tokens
+                month_cost += today_cost
+        yearly_data.append((month_names[m - 1], month_tokens, month_cost))
+
+    console.print(make_yearly_ecosystem(yearly_data))
+    console.print()
+
+
 @main.command(name="server", context_settings=CONTEXT_SETTINGS)
 @click.argument("action", type=click.Choice(["start"]))
 @click.option("--host", default="0.0.0.0", show_default=True, help="Bind host.")
