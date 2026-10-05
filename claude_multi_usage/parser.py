@@ -107,9 +107,14 @@ def _deduplicate_project_name(name: str) -> str:
     """Remove duplicate path segments from project names.
 
     e.g., 'apr-backend-assignment-apr-backend-assignment' -> 'apr-backend-assignment'
-          'url-jarvis-url-jarvis-docs' -> 'url-jarvis/docs'
+          'url-jarvis-url-jarvis-docs' -> 'url-jarvis/-docs'
+          (the caller then collapses '/-' to '-', giving 'url-jarvis-docs')
+
+    This is a heuristic: any name whose second half starts with its first
+    half is treated as a duplicate, so e.g. 'foo-foobar' becomes 'foo/bar'.
     """
-    # 이름을 반으로 나눠서 앞뒤가 같으면 중복
+    # Split the name at every position; if the remainder starts with
+    # "-" + prefix, the prefix was repeated.
     length = len(name)
     for split_pos in range(1, length):
         prefix = name[:split_pos]

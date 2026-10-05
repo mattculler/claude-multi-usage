@@ -50,8 +50,8 @@ def _parse_sessions_for_date_range(start_date: str, end_date: str):
                         except json.JSONDecodeError:
                             continue
 
-                        # assistant 타입: 직접 응답
-                        # progress 타입: 서브에이전트(haiku 등) 응답
+                        # "assistant" entries: direct responses
+                        # "progress" entries: subagent (e.g. haiku) responses
                         entry_type = d.get("type")
                         if entry_type == "assistant":
                             ts = d.get("timestamp", "")
@@ -70,7 +70,7 @@ def _parse_sessions_for_date_range(start_date: str, end_date: str):
                         else:
                             continue
 
-                        # UTC timestamp를 로컬 시간으로 변환
+                        # Convert the UTC timestamp to local time
                         local_dt = _utc_to_local(ts)
                         date_str = local_dt.strftime("%Y-%m-%d") if local_dt else ""
                         if not date_str or date_str < start_date or date_str > end_date:
@@ -80,7 +80,7 @@ def _parse_sessions_for_date_range(start_date: str, end_date: str):
                         if not model or "claude" not in model:
                             continue
 
-                        # 중복 메시지 제거 (같은 message ID는 한 번만 카운트)
+                        # Skip duplicate messages (each message ID is counted once)
                         msg_id = msg.get("id", "")
                         if msg_id:
                             if msg_id in seen_msg_ids:
@@ -141,20 +141,20 @@ def get_costs() -> Optional[tuple]:
     cached_daily = cache.get("daily_costs", {})
     needs_save = False
 
-    # 캐시가 없으면 전체 파싱 (최초 실행)
+    # No cache yet: parse everything (first run)
     if last_cached is None:
         start = "2020-01-01"
     elif last_cached < yesterday_str:
-        # 캐시 이후 ~ 어제까지 파싱 필요
+        # Parse from the day after the cached date up to yesterday
         start = (datetime.strptime(last_cached, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
     else:
-        start = None  # 캐시가 최신, 과거 파싱 불필요
+        start = None  # cache is current; no historical parsing needed
 
-    # 과거 데이터 파싱 (어제까지)
+    # Parse historical data (up to yesterday)
     if start:
         new_daily = _parse_sessions_for_date_range(start, yesterday_str)
         for date_str, models in new_daily.items():
-            # float로 변환하여 저장
+            # Store as plain dicts
             cached_daily[date_str] = {
                 model: {
                     "cost": data["cost"],
@@ -174,7 +174,7 @@ def get_costs() -> Optional[tuple]:
         )
         needs_save = True
 
-    # 오늘 데이터는 실시간 계산 (캐시하지 않음)
+    # Today's data is computed in realtime (never cached)
     today_daily = _parse_sessions_for_date_range(today_str, today_str)
     today_cost = sum(
         data["cost"]
@@ -187,7 +187,7 @@ def get_costs() -> Optional[tuple]:
 
     total_cost = cache.get("total_cost", 0.0) + today_cost
 
-    # daily_costs에 오늘 데이터도 포함한 전체 반환
+    # Return daily_costs including today's data
     all_daily = dict(cached_daily)
     for date_str, models in today_daily.items():
         all_daily[date_str] = {

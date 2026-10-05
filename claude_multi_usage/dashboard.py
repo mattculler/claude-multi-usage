@@ -99,7 +99,7 @@ def make_daily_chart(data: UsageData, days: int = 14,
             max_tokens = tokens
         current += timedelta(days=1)
 
-    # 일별 비용 계산
+    # Per-day cost
     cost_map: dict[str, float] = {}
     if daily_costs:
         for date_str, models in daily_costs.items():

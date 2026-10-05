@@ -24,15 +24,15 @@ CACHE_DIR = Path.home() / ".claude-multi-usage"
 PRICING_CACHE_FILE = CACHE_DIR / "pricing-cache.json"
 PRICING_CACHE_MAX_AGE_HOURS = 24
 
-# 200K 토큰 초과 tiered pricing threshold
+# Tiered pricing threshold (above 200K tokens)
 TIERED_THRESHOLD = 200_000
 
-# 캐시된 pricing 데이터 (메모리)
+# In-memory pricing cache
 _pricing_cache: Optional[dict] = None
 
 
 def _fetch_litellm_pricing() -> Optional[dict]:
-    """LiteLLM pricing JSON을 fetch하여 Claude 모델만 추출."""
+    """Fetch LiteLLM's pricing JSON and keep only Claude models."""
     try:
         req = urllib.request.Request(
             LITELLM_PRICING_URL,
@@ -43,7 +43,7 @@ def _fetch_litellm_pricing() -> Optional[dict]:
     except (urllib.error.URLError, json.JSONDecodeError, OSError):
         return None
 
-    # Claude 모델만 필터링
+    # Keep only Claude models
     claude_models = {}
     for key, info in all_models.items():
         if "claude" not in key:
@@ -77,9 +77,9 @@ def _save_pricing_cache(data: dict) -> None:
 
 
 def _load_pricing_cache(ignore_expiry: bool = False) -> Optional[dict]:
-    """로컬 캐시에서 pricing 데이터 로드.
+    """Load pricing data from the local cache.
 
-    ignore_expiry=True면 만료 여부 무시하고 데이터가 있으면 반환 (fallback용).
+    With ignore_expiry=True the data is returned even if stale (fallback).
     """
     if not PRICING_CACHE_FILE.exists():
         return None
@@ -100,54 +100,54 @@ def get_pricing() -> Optional[dict]:
     """Get pricing data (from cache, fetch, or last cached fallback).
 
     Returns dict or None if no pricing data is available at all.
-    1. 메모리 캐시 → 2. 로컬 캐시 (24h 이내) → 3. LiteLLM fetch → 4. 만료된 로컬 캐시 → 5. None
+    1. memory cache -> 2. local cache (<24h) -> 3. LiteLLM fetch -> 4. stale local cache -> 5. None
     """
     global _pricing_cache
     if _pricing_cache is not None:
         return _pricing_cache
 
-    # 로컬 캐시 확인 (24시간 이내)
+    # Local cache (within 24 hours)
     data = _load_pricing_cache()
     if data is not None:
         _pricing_cache = data
         return data
 
-    # LiteLLM에서 fetch
+    # Fetch from LiteLLM
     data = _fetch_litellm_pricing()
     if data is not None:
         _save_pricing_cache(data)
         _pricing_cache = data
         return data
 
-    # Fallback: 만료된 캐시라도 있으면 사용
+    # Fallback: use a stale cache if one exists
     data = _load_pricing_cache(ignore_expiry=True)
     if data is not None:
         _pricing_cache = data
         return data
 
-    # 가격 데이터 없음
+    # No pricing data available
     return None
 
 
 def _match_model(model_id: str) -> Optional[dict]:
-    """모델 ID에서 pricing 데이터 매칭.
+    """Match a model ID to pricing data.
 
-    정확한 키 매칭 → 부분 매칭 → fallback 순서.
+    Order: exact key match -> partial match -> fallback.
     """
     pricing = get_pricing()
     if not pricing:
         return None
 
-    # 정확 매칭
+    # Exact match
     if model_id in pricing:
         return pricing[model_id]
 
-    # 부분 매칭 (긴 키 우선으로 정렬하여 가장 구체적인 매칭)
+    # Partial match (longest keys first so the most specific entry wins)
     for key in sorted(pricing.keys(), key=len, reverse=True):
         if key in model_id or model_id in key:
             return pricing[key]
 
-    # fallback: sonnet 가격
+    # Fallback: sonnet pricing
     for key in pricing:
         if "sonnet" in key:
             return pricing[key]
@@ -157,7 +157,7 @@ def _match_model(model_id: str) -> Optional[dict]:
 
 def _tiered_cost(tokens: int, base_price: float,
                  tiered_price: Optional[float] = None) -> float:
-    """200K 초과 tiered pricing 적용."""
+    """Apply tiered pricing above the 200K threshold."""
     if tokens <= 0 or base_price is None:
         return 0.0
     if tiered_price is not None and tokens > TIERED_THRESHOLD:

@@ -223,10 +223,10 @@ def _fetch_all_devices(key: str | None = None) -> list[dict]:
         console.print("Run: cmu config key add <your-key>")
         raise SystemExit(1)
 
-    # 특정 key가 지정되면 해당 key만, 아니면 등록된 모든 key로 조회
+    # Query only the given key, otherwise every registered key
     query_keys = [key] if key else [k["key"] for k in keys]
 
-    all_devices: dict[str, dict] = {}  # hostname -> device data (중복 제거)
+    all_devices: dict[str, dict] = {}  # hostname -> device data (deduplicated)
     for qk in query_keys:
         try:
             params = urllib.parse.urlencode({"key": qk})
@@ -349,7 +349,7 @@ def today():
             table.add_row(f"Tokens ({short})", format_tokens(tokens))
         table.add_row("Total Tokens", format_tokens(tokens_data.total_tokens))
 
-    # 오늘 비용 계산
+    # Today's cost
     from .cost_cache import _parse_sessions_for_date_range
     from .pricing import get_pricing
     if get_pricing() is not None:
