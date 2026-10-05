@@ -135,6 +135,8 @@ def _match_model(model_id: str) -> Optional[dict]:
     정확한 키 매칭 → 부분 매칭 → fallback 순서.
     """
     pricing = get_pricing()
+    if not pricing:
+        return None
 
     # 정확 매칭
     if model_id in pricing:

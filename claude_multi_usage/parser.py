@@ -109,10 +109,35 @@ def _deduplicate_project_name(name: str) -> str:
     return name
 
 
-def _parse_session_tokens(session_file: Path, calc_cost: bool = False) -> tuple:
-    """Parse a session jsonl file and return (output_tokens, input_tokens, timestamps, cost)."""
+def _is_duplicate_message(message: dict, seen_msg_ids: set) -> bool:
+    """Return True if this assistant message was already counted.
+
+    Claude Code writes one JSONL line per content block of an assistant
+    message (text, tool_use, ...), and every line repeats the same
+    ``message.id`` and ``usage``.  Token counts and costs must therefore be
+    accumulated only once per message id.  Messages without an id (e.g.
+    synthetic ones) are never treated as duplicates.
+    """
+    msg_id = message.get("id") if isinstance(message, dict) else None
+    if not msg_id:
+        return False
+    if msg_id in seen_msg_ids:
+        return True
+    seen_msg_ids.add(msg_id)
+    return False
+
+
+def _parse_session_tokens(session_file: Path, calc_cost: bool = False,
+                          seen_msg_ids: set | None = None) -> tuple:
+    """Parse a session jsonl file and return (output_tokens, input_tokens, timestamps, cost).
+
+    ``seen_msg_ids`` may be shared across files so that resumed or forked
+    sessions, which copy earlier history into a new file, are not counted twice.
+    """
     from .pricing import calculate_model_cost
 
+    if seen_msg_ids is None:
+        seen_msg_ids = set()
     output_tokens = 0
     input_tokens = 0
     timestamps = []
@@ -125,16 +150,18 @@ def _parse_session_tokens(session_file: Path, calc_cost: bool = False) -> tuple:
                 except json.JSONDecodeError:
                     continue
                 if d.get("type") == "assistant":
-                    usage = d.get("message", {}).get("usage", {})
-                    out = usage.get("output_tokens", 0)
-                    inp = usage.get("input_tokens", 0)
-                    cache_read = usage.get("cache_read_input_tokens", 0)
-                    cache_create = usage.get("cache_creation_input_tokens", 0)
-                    output_tokens += out
-                    input_tokens += inp + cache_read + cache_create
-                    if calc_cost:
-                        model = d.get("message", {}).get("model", "")
-                        cost += calculate_model_cost(model, inp, out, cache_read, cache_create)
+                    message = d.get("message", {})
+                    if not _is_duplicate_message(message, seen_msg_ids):
+                        usage = message.get("usage", {})
+                        out = usage.get("output_tokens", 0)
+                        inp = usage.get("input_tokens", 0)
+                        cache_read = usage.get("cache_read_input_tokens", 0)
+                        cache_create = usage.get("cache_creation_input_tokens", 0)
+                        output_tokens += out
+                        input_tokens += inp + cache_read + cache_create
+                        if calc_cost:
+                            model = message.get("model", "")
+                            cost += calculate_model_cost(model, inp, out, cache_read, cache_create)
                 ts = d.get("timestamp")
                 if ts:
                     timestamps.append(ts)
@@ -151,6 +178,7 @@ def parse_projects(with_tokens: bool = True) -> list:
         return []
 
     has_pricing = get_pricing() is not None
+    seen_msg_ids: set = set()
     projects = []
     for project_dir in sorted(PROJECTS_DIR.iterdir()):
         if not project_dir.is_dir():
@@ -183,7 +211,8 @@ def parse_projects(with_tokens: bool = True) -> list:
 
         if with_tokens:
             for sf in session_files:
-                out_t, in_t, ts_list, sf_cost = _parse_session_tokens(sf, calc_cost=has_pricing)
+                out_t, in_t, ts_list, sf_cost = _parse_session_tokens(
+                    sf, calc_cost=has_pricing, seen_msg_ids=seen_msg_ids)
                 total_output += out_t
                 total_input += in_t
                 total_cost += sf_cost
@@ -237,6 +266,7 @@ def parse_today_hourly() -> list[HourlyUsage]:
     if not PROJECTS_DIR.exists():
         return []
 
+    seen_msg_ids: set = set()
     for project_dir in PROJECTS_DIR.iterdir():
         if not project_dir.is_dir():
             continue
@@ -261,14 +291,17 @@ def parse_today_hourly() -> list[HourlyUsage]:
                         elif msg_type == "assistant":
                             hourly[hour]["messages"] += 1
                             hourly[hour]["sessions"].add(str(session_file))
-                            usage = d.get("message", {}).get("usage", {})
+                            message = d.get("message", {})
+                            if _is_duplicate_message(message, seen_msg_ids):
+                                continue
+                            usage = message.get("usage", {})
                             out = usage.get("output_tokens", 0)
                             hourly[hour]["tokens"] += out
                             if has_pricing:
                                 inp = usage.get("input_tokens", 0)
                                 cache_read = usage.get("cache_read_input_tokens", 0)
                                 cache_create = usage.get("cache_creation_input_tokens", 0)
-                                model = d.get("message", {}).get("model", "")
+                                model = message.get("model", "")
                                 hourly[hour]["cost"] += calculate_model_cost(
                                     model, inp, out, cache_read, cache_create
                                 )
@@ -298,11 +331,12 @@ def parse_today_usage() -> Optional[DailyActivity]:
     if not PROJECTS_DIR.exists():
         return None
 
+    seen_msg_ids: set = set()
     for project_dir in PROJECTS_DIR.iterdir():
         if not project_dir.is_dir():
             continue
         for session_file in project_dir.glob("*.jsonl"):
-            # 오늘 수정된 파일만 검사
+            # Only inspect files modified today
             if datetime.fromtimestamp(session_file.stat().st_mtime).strftime("%Y-%m-%d") != today_str:
                 continue
             session_has_today = False
@@ -322,17 +356,20 @@ def parse_today_usage() -> Optional[DailyActivity]:
                             session_has_today = True
                         elif msg_type == "assistant":
                             message_count += 1
-                            usage = d.get("message", {}).get("usage", {})
-                            out = usage.get("output_tokens", 0)
-                            model = d.get("message", {}).get("model", "unknown")
-                            today_tokens[model] = today_tokens.get(model, 0) + out
-                            # tool_use 블록 카운트
-                            content = d.get("message", {}).get("content", [])
+                            message = d.get("message", {})
+                            # Count tool_use blocks (each JSONL line carries its own block)
+                            content = message.get("content", [])
                             if isinstance(content, list):
                                 tool_call_count += sum(
                                     1 for c in content
                                     if isinstance(c, dict) and c.get("type") == "tool_use"
                                 )
+                            if _is_duplicate_message(message, seen_msg_ids):
+                                continue
+                            usage = message.get("usage", {})
+                            out = usage.get("output_tokens", 0)
+                            model = message.get("model", "unknown")
+                            today_tokens[model] = today_tokens.get(model, 0) + out
             except (OSError, IOError):
                 continue
             if session_has_today:

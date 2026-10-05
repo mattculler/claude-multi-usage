@@ -8,7 +8,6 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.columns import Columns
-from rich.rule import Rule
 
 from .parser import UsageData, HourlyUsage
 from .pricing import format_cost

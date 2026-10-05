@@ -12,7 +12,6 @@ from .models import (
     DeviceActivity,
     DeviceModelTokens,
     DeviceProject,
-    DeviceHourlyUsage,
 )
 
 DEFAULT_DB_PATH = Path("/data") / "server.db"
