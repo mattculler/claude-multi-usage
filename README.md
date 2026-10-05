@@ -226,6 +226,16 @@ No API keys required. Local data stays local unless you opt in to sync.
 - [x] Homebrew support
 - [ ] Web dashboard ([#3](https://github.com/hunknownn/claude-multi-usage/issues/3))
 
+## Development
+
+```bash
+pip install -e ".[server,dev]"
+ruff check --select F claude_multi_usage tests
+pytest
+```
+
+Tests run against a synthetic `~/.claude` tree in a temp directory and never touch the network.
+
 ## License
 
 MIT
