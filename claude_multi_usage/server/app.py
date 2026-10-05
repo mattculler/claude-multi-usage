@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, Query
 
@@ -42,9 +43,9 @@ async def sync(payload: SyncPayload):
 
 @app.get("/api/devices", response_model=list[DeviceInfo])
 async def list_devices(
-    key: str | None = Query(None, description="Filter by key"),
+    key: Optional[str] = Query(None, description="Filter by key"),
     # backward compat
-    email: str | None = Query(None, description="(deprecated) Filter by email, use key instead"),
+    email: Optional[str] = Query(None, description="(deprecated) Filter by email, use key instead"),
 ):
     """List all registered devices, optionally filtered by key."""
     filter_key = key or email
@@ -53,10 +54,10 @@ async def list_devices(
 
 @app.get("/api/usage")
 async def get_usage(
-    key: str | None = Query(None, description="Filter by key"),
-    hostname: str | None = Query(None, description="Filter by hostname"),
+    key: Optional[str] = Query(None, description="Filter by key"),
+    hostname: Optional[str] = Query(None, description="Filter by hostname"),
     # backward compat
-    email: str | None = Query(None, description="(deprecated) Filter by email, use key instead"),
+    email: Optional[str] = Query(None, description="(deprecated) Filter by email, use key instead"),
 ):
     """Get usage data, filtered by key or hostname."""
     store = get_store()

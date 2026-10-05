@@ -66,6 +66,15 @@ class ProjectSummary:
 
 
 @dataclass
+class HourlyUsage:
+    hour: int
+    message_count: int
+    session_count: int
+    tokens: int
+    cost: float = 0.0
+
+
+@dataclass
 class UsageData:
     hostname: str
     alias: str | None = None
@@ -77,6 +86,10 @@ class UsageData:
     total_sessions: int = 0
     total_messages: int = 0
     first_session_date: str | None = None
+    # Per-hour usage for one day, only populated for data received from the
+    # sync server; today_hourly_date says which day it describes.
+    today_hourly: list[HourlyUsage] = field(default_factory=list)
+    today_hourly_date: str | None = None
 
 
 def get_hostname() -> str:
@@ -243,15 +256,6 @@ def parse_projects(with_tokens: bool = True) -> list:
         ))
 
     return sorted(projects, key=lambda p: p.output_tokens, reverse=True)
-
-
-@dataclass
-class HourlyUsage:
-    hour: int
-    message_count: int
-    session_count: int
-    tokens: int
-    cost: float = 0.0
 
 
 def parse_today_hourly() -> list[HourlyUsage]:

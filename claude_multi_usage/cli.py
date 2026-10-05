@@ -78,13 +78,14 @@ def _build_device_usage_data(device: dict) -> UsageData:
         total_sessions=device.get("total_sessions", 0),
         total_messages=device.get("total_messages", 0),
         first_session_date=device.get("first_session_date"),
+        alias=device.get("alias"),
+        today_hourly=[
+            HourlyUsage(hour=h["hour"], message_count=h["message_count"],
+                        session_count=h["session_count"], tokens=h["tokens"])
+            for h in device.get("today_hourly", [])
+        ],
+        today_hourly_date=device.get("today_hourly_date"),
     )
-    usage_data.alias = device.get("alias")
-    usage_data.today_hourly = [
-        HourlyUsage(hour=h["hour"], message_count=h["message_count"],
-                    session_count=h["session_count"], tokens=h["tokens"])
-        for h in device.get("today_hourly", [])
-    ]
     return usage_data
 
 
@@ -504,14 +505,15 @@ def diff(days: int, date_from: str, date_to: str, merged: bool,
       cmu diff -d 30                 Last 30 days
 
     \b
-    Includes: summary, model usage, daily token chart, and top projects.
-    Hourly heatmap is omitted (cumulative data not synced).
+    Includes: summary, model usage, daily token chart, hourly usage for
+    the day each device last synced, and top projects. Cost estimates are
+    not shown: the server holds token counts only.
     """
     devices = _fetch_all_devices(key=filter_key)
 
     if merged:
         data = _merge_devices_usage(devices)
-        render_dashboard(data, days=days, date_from=date_from, date_to=date_to)
+        render_dashboard(data, days=days, date_from=date_from, date_to=date_to, local=False)
     else:
         devices_data = [_build_device_usage_data(d) for d in devices]
         render_multi_device_dashboard(devices_data, days=days, date_from=date_from, date_to=date_to)
@@ -717,6 +719,20 @@ def sync(quiet: bool):
         "alias": get_alias(),
         "keys": key_values,
         "synced_at": datetime.now().isoformat(),
+        # Cumulative figures from stats-cache.json. They are a few hundred
+        # bytes and the diff view's Summary / Model Usage panels need them.
+        "total_sessions": data.total_sessions,
+        "total_messages": data.total_messages,
+        "first_session_date": data.first_session_date,
+        "model_usage": [
+            {"model": m.model, "input_tokens": m.input_tokens,
+             "output_tokens": m.output_tokens, "cache_read_tokens": m.cache_read_tokens,
+             "cache_creation_tokens": m.cache_creation_tokens}
+            for m in data.model_usage
+        ],
+        "hour_counts": {str(k): v for k, v in data.hour_counts.items()},
+        # Which day today_hourly describes, so stale data is labelled correctly
+        "today_hourly_date": datetime.now().strftime("%Y-%m-%d"),
         "today_hourly": [
             {"hour": h.hour, "message_count": h.message_count,
              "session_count": h.session_count, "tokens": h.tokens}

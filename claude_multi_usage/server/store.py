@@ -184,6 +184,7 @@ def _merge_payloads(old: SyncPayload, new: SyncPayload) -> SyncPayload:
         projects=_merge_projects(old.projects, new.projects),
         hour_counts=new.hour_counts or old.hour_counts,
         today_hourly=new.today_hourly if new.today_hourly else old.today_hourly,
+        today_hourly_date=new.today_hourly_date if new.today_hourly else old.today_hourly_date,
         total_sessions=max(old.total_sessions, new.total_sessions),
         total_messages=max(old.total_messages, new.total_messages),
         first_session_date=_earlier_date(old.first_session_date, new.first_session_date),

@@ -22,8 +22,15 @@ def format_tokens(n: int) -> str:
     return str(n)
 
 
-def make_summary_panel(data: UsageData) -> Panel:
-    """Overall summary stats."""
+def make_summary_panel(data: UsageData, local: bool = True) -> Panel:
+    """Overall summary stats.
+
+    ``local`` means ``data`` describes this machine, so the cost estimate can
+    be computed from the local session files.  For data that came from the
+    sync server (``cmu diff``) no cost is shown: the server carries no cost
+    data, and consulting the local cost cache would attribute this machine's
+    spend to another device.
+    """
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column("label", style="dim")
     table.add_column("value", style="bold cyan")
@@ -39,12 +46,15 @@ def make_summary_panel(data: UsageData) -> Panel:
     total_output = sum(m.output_tokens for m in data.model_usage)
     table.add_row("Total Output Tokens", format_tokens(total_output))
 
-    costs = get_costs()
-    if costs is not None:
-        _, total_cost, _ = costs
-        table.add_row("Estimated Cost", f"[bold yellow]{format_cost(total_cost)}[/bold yellow]")
+    if not local:
+        table.add_row("Estimated Cost", "[dim]n/a (not synced)[/dim]")
     else:
-        table.add_row("Estimated Cost", "[dim]pricing data unavailable[/dim]")
+        costs = get_costs()
+        if costs is not None:
+            _, total_cost, _ = costs
+            table.add_row("Estimated Cost", f"[bold yellow]{format_cost(total_cost)}[/bold yellow]")
+        else:
+            table.add_row("Estimated Cost", "[dim]pricing data unavailable[/dim]")
 
     return Panel(table, title="Summary", border_style="blue")
 
@@ -149,9 +159,16 @@ def make_hourly_heatmap(data: UsageData) -> Panel:
     return Panel(table, title="Hourly Sessions (all time)", border_style="yellow")
 
 
-def make_today_hourly_chart(hourly: list[HourlyUsage]) -> Panel:
-    """Today's 24-hour usage bar chart."""
-    now_hour = datetime.now().hour
+def make_today_hourly_chart(hourly: list[HourlyUsage], date_str: str | None = None) -> Panel:
+    """24-hour usage bar chart.
+
+    ``date_str`` is the day the data describes (default: today).  Data synced
+    from another device may be older than today; it is then labelled with its
+    own date and the current-hour marker is suppressed.
+    """
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    is_today = date_str is None or date_str == today_str
+    now_hour = datetime.now().hour if is_today else 24
     max_tokens = max((h.tokens for h in hourly), default=1) or 1
     bar_width = 25
     lines = []
@@ -178,8 +195,11 @@ def make_today_hourly_chart(hourly: list[HourlyUsage]) -> Panel:
     cost_str = f", {format_cost(total_cost)}" if total_cost > 0 else ""
     lines.append(f"   Total   {format_tokens(total_tokens)} tokens, {total_msgs} messages{cost_str}")
 
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    return Panel("\n".join(lines), title=f"Today Hourly Usage ({today_str})", border_style="cyan")
+    if is_today:
+        title = f"Today Hourly Usage ({today_str})"
+    else:
+        title = f"Hourly Usage ({date_str}, last sync)"
+    return Panel("\n".join(lines), title=title, border_style="cyan")
 
 
 def make_projects_table(data: UsageData, limit: int = 10) -> Panel:
@@ -207,9 +227,9 @@ def make_projects_table(data: UsageData, limit: int = 10) -> Panel:
     return Panel(table, title=f"Top Projects (total {len(data.projects)})", border_style="magenta")
 
 
-def make_models_table(data: UsageData) -> Panel:
-    """Model usage breakdown with costs from cache."""
-    costs = get_costs()
+def make_models_table(data: UsageData, local: bool = True) -> Panel:
+    """Model usage breakdown, with costs from the local cache for local data."""
+    costs = get_costs() if local else None
     has_costs = costs is not None
 
     model_costs = {}
@@ -242,8 +262,14 @@ def make_models_table(data: UsageData) -> Panel:
 
 
 def render_dashboard(data: UsageData, days: int = 14,
-                     date_from: str = None, date_to: str = None) -> None:
-    """Render the full dashboard."""
+                     date_from: str = None, date_to: str = None,
+                     local: bool = True) -> None:
+    """Render the full dashboard.
+
+    ``local=False`` renders data that came from the sync server (the merged
+    ``cmu diff`` view): the local cost cache and local session files are not
+    consulted, since they describe this machine rather than ``data``.
+    """
     console = Console()
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -253,20 +279,28 @@ def render_dashboard(data: UsageData, days: int = 14,
     console.print()
 
     # Summary + Models side by side
-    console.print(Columns([make_summary_panel(data), make_models_table(data)], equal=True))
+    console.print(Columns([make_summary_panel(data, local=local),
+                           make_models_table(data, local=local)], equal=True))
     console.print()
 
     # Daily chart (with cost data if available)
-    costs = get_costs()
-    daily_costs = costs[0] if costs else None
+    daily_costs = None
+    if local:
+        costs = get_costs()
+        daily_costs = costs[0] if costs else None
     console.print(make_daily_chart(data, days=days, date_from=date_from, date_to=date_to, daily_costs=daily_costs))
     console.print()
 
-    # Today hourly chart
-    from .parser import parse_today_hourly
-    hourly = parse_today_hourly()
+    # Hourly chart: today's local data, or the day the remote data describes
+    if local:
+        from .parser import parse_today_hourly
+        hourly = parse_today_hourly()
+        hourly_date = None
+    else:
+        hourly = data.today_hourly
+        hourly_date = data.today_hourly_date
     if any(h.tokens > 0 or h.message_count > 0 for h in hourly):
-        console.print(make_today_hourly_chart(hourly))
+        console.print(make_today_hourly_chart(hourly, date_str=hourly_date))
         console.print()
 
     # Hourly heatmap
@@ -280,7 +314,7 @@ def render_dashboard(data: UsageData, days: int = 14,
 
 def _device_display_name(data: UsageData) -> str:
     """Return display name: alias (hostname) or just hostname."""
-    if hasattr(data, "alias") and data.alias:
+    if data.alias:
         return f"{data.alias} ({data.hostname})"
     return data.hostname
 
@@ -307,19 +341,18 @@ def render_multi_device_dashboard(
         console.rule(f"[bold cyan]── {display_name} ──[/bold cyan]")
         console.print()
 
-        # Summary + Models side by side
-        console.print(Columns([make_summary_panel(data), make_models_table(data)], equal=True))
+        # Summary + Models side by side (remote data: no local cost lookup)
+        console.print(Columns([make_summary_panel(data, local=False),
+                               make_models_table(data, local=False)], equal=True))
         console.print()
 
         # Daily chart
         console.print(make_daily_chart(data, days=days, date_from=date_from, date_to=date_to))
         console.print()
 
-        # Today hourly chart
-        if hasattr(data, 'today_hourly') and data.today_hourly and any(
-            h.tokens > 0 or h.message_count > 0 for h in data.today_hourly
-        ):
-            console.print(make_today_hourly_chart(data.today_hourly))
+        # Hourly chart for the day the device last synced
+        if any(h.tokens > 0 or h.message_count > 0 for h in data.today_hourly):
+            console.print(make_today_hourly_chart(data.today_hourly, date_str=data.today_hourly_date))
             console.print()
 
         # Projects
