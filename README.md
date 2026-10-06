@@ -6,15 +6,18 @@ Parses local `~/.claude` data and displays usage stats in your terminal — sess
 
 ## Install
 
-**Homebrew (macOS)**
-```bash
-brew tap hunknownn/tap
-brew install claude-multi-usage
-```
+This fork is installed from the repository. The upstream package on PyPI and Homebrew (`pipx install claude-multi-usage`, `brew install hunknownn/tap/claude-multi-usage`) is upstream's release line and does not contain this fork's fixes (token deduplication, repository-name projects, the server's size limit).
 
 **pipx**
 ```bash
-pipx install claude-multi-usage
+pipx install "git+https://github.com/mattculler/claude-multi-usage.git"
+```
+
+**pip, from a checkout**
+```bash
+git clone https://github.com/mattculler/claude-multi-usage.git
+cd claude-multi-usage
+pip install .            # or: pip install ".[server]" to include the sync server
 ```
 
 ## Usage
@@ -46,21 +49,23 @@ Collect usage data from multiple machines into a central server.
 
 ### What gets synced
 
-`cmu sync` sends: hostname, alias, your keys, per-day message/session/tool-call counts, per-day and cumulative token counts by model, an hourly session histogram, today's per-hour tokens, and a project list. Projects are identified by repository name only (the last component of the working directory Claude Code ran in), with session counts, token totals and first/last-seen dates. It never sends prompts, responses, file contents, full paths, or API keys.
+`cmu sync` sends: hostname, alias, your keys, the sync time, cumulative session and message totals and the first-session date, per-day message/session/tool-call counts, per-day and cumulative token counts by model, an hourly session histogram, today's per-hour tokens/messages/sessions, and a project list. Projects are identified by repository name (the last component of the working directory Claude Code ran in; a Claude Code worktree counts as its repository), with session counts, token totals and first/last-seen dates. It never sends prompts, responses, file contents, full paths, or API keys.
+
+For very old session logs that recorded no working directory, the name is guessed from Claude Code's directory name instead and may be truncated (for example `my-repo` becomes `repo`). Servers that received syncs from clients older than this fork keep the full-path names those clients sent until the server is restarted or the device syncs again; both drop them.
 
 ### Server Setup
 
 **Run directly on a VM (systemd)**
 
-On a Linux host with systemd and Python 3.9+ (`python3-venv` on Debian/Ubuntu), from a checkout of this repository:
+On a Linux host with systemd and Python 3.9+ (on Debian/Ubuntu also `apt install python3-venv`), from a checkout of this repository:
 
 ```bash
-git clone https://github.com/hunknownn/claude-multi-usage.git
+git clone https://github.com/mattculler/claude-multi-usage.git
 cd claude-multi-usage
 sudo deploy/systemd/install.sh
 ```
 
-The script creates a `cmu` system user, installs the package into `/opt/cmu/venv`, keeps the database in `/var/lib/cmu/server.db`, and enables `cmu-server.service` on port 8000. Settings (bind address, port, database path, request size limit) live in `/etc/default/cmu-server`; restart the service after editing. To upgrade, `git pull` and re-run the script. To remove it, `sudo deploy/systemd/install.sh --uninstall`.
+The script creates a `cmu` system user, installs the package into `/opt/cmu/venv`, keeps the database in `/var/lib/cmu/server.db`, and enables `cmu-server.service` on port 8000, then waits for `/api/health` to answer. Settings (bind address, port, database path, request size limit) live in `/etc/default/cmu-server`; restart the service after editing. A different database directory must exist and be writable by the `cmu` user. To upgrade, `git pull` and re-run the script. To remove it, `sudo deploy/systemd/install.sh --uninstall`.
 
 ```bash
 systemctl status cmu-server
@@ -73,8 +78,11 @@ curl http://localhost:8000/api/health
 <details>
 <summary>Docker</summary>
 
+Build the image from this checkout; the published `ghcr.io/hunknownn/claude-multi-usage` image is upstream's build and lacks this fork's changes.
+
 ```bash
-docker run -d -p 127.0.0.1:8000:8000 -v cmu-data:/data ghcr.io/hunknownn/claude-multi-usage:latest
+docker build -t cmu-server .
+docker run -d --name cmu-server -p 127.0.0.1:8000:8000 -v cmu-data:/data cmu-server
 ```
 
 Replace `127.0.0.1` with the LAN address clients should use. Do not publish the port on a public interface.
@@ -83,9 +91,11 @@ Replace `127.0.0.1` with the LAN address clients should use. Do not publish the 
 <details>
 <summary>Kubernetes</summary>
 
+`deploy/k8s/` has a Kustomize base (Deployment, ClusterIP Service, 1 GiB PVC). Its `kustomization.yaml` pins upstream's `ghcr.io/hunknownn/claude-multi-usage` image; to run this fork's code, build and push your own image and point the `images:` entry at it, then:
+
 ```bash
 kubectl create namespace cmu-server
-kubectl apply -k https://github.com/hunknownn/claude-multi-usage/deploy/k8s/ -n cmu-server
+kubectl apply -k deploy/k8s/ -n cmu-server
 ```
 
 The Service is `ClusterIP`, reachable inside the cluster only. `deploy/k8s/ingress.example.yaml` shows how to expose it through an Ingress; only do that behind an authenticating ingress or on a private network.
@@ -94,8 +104,10 @@ The Service is `ClusterIP`, reachable inside the cluster only. `deploy/k8s/ingre
 <details>
 <summary>pip, in the foreground</summary>
 
+From a checkout of this repository:
+
 ```bash
-pip install "claude-multi-usage[server]"
+pip install ".[server]"
 cmu server start --host 0.0.0.0 --port 8000 --db-path ./server.db
 ```
 

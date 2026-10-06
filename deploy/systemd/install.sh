@@ -10,10 +10,11 @@
 # What it does:
 #   - creates a system user "cmu" with no login shell
 #   - creates a virtualenv in /opt/cmu/venv and installs this checkout into it
-#     with the [server] extra (needs network access to PyPI)
+#     with the [server] extra (needs network access to PyPI for dependencies)
 #   - creates /var/lib/cmu for the SQLite database
 #   - writes /etc/default/cmu-server (settings; created once, never overwritten)
 #   - installs cmu-server.service, enables it and (re)starts it
+#   - waits for /api/health to answer
 #
 # To upgrade: git pull, then re-run this script. The database is kept.
 #
@@ -52,8 +53,10 @@ fi
 [[ -f "$REPO_ROOT/pyproject.toml" && -f "$UNIT_SRC" ]] \
     || die "run this script from a checkout of the repository (pyproject.toml not found at $REPO_ROOT)"
 command -v "$PYTHON" >/dev/null 2>&1 || die "$PYTHON not found; need Python 3.9+ (set PYTHON=/path/to/python3 to choose one)"
-"$PYTHON" -c 'import sys, venv; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null \
-    || die "$PYTHON must be Python 3.9+ with the venv module (Debian/Ubuntu: apt install python3-venv)"
+# On Debian/Ubuntu the venv module is always present but ensurepip (which
+# `python3 -m venv` needs) lives in the separate python3-venv package.
+"$PYTHON" -c 'import sys, venv, ensurepip; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null \
+    || die "$PYTHON must be Python 3.9+ with venv and ensurepip (Debian/Ubuntu: apt install python3-venv)"
 
 echo "==> System user and directories"
 if ! id -u "$APP_USER" >/dev/null 2>&1; then
@@ -64,11 +67,23 @@ install -d -m 755 "$INSTALL_DIR"
 install -d -m 750 -o "$APP_USER" -g "$APP_USER" "$DATA_DIR"
 
 echo "==> Virtualenv in $VENV"
-if [[ ! -x "$VENV/bin/python" ]]; then
+# A venv whose pip is missing (e.g. created before python3-venv was installed)
+# is recreated rather than reused.
+if [[ ! -x "$VENV/bin/python" ]] || ! "$VENV/bin/python" -m pip --version >/dev/null 2>&1; then
+    rm -rf "$VENV"
     "$PYTHON" -m venv "$VENV"
 fi
 "$VENV/bin/python" -m pip install --quiet --upgrade pip
-"$VENV/bin/python" -m pip install --quiet --upgrade "$REPO_ROOT[server]"
+
+# Build from a scratch copy so pip (running as root) does not leave root-owned
+# build/ and *.egg-info/ directories in the checkout.
+BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf "$BUILD_DIR"' EXIT
+tar -C "$REPO_ROOT" \
+    --exclude=.git --exclude=.venv --exclude=venv --exclude=build \
+    --exclude='*.egg-info' --exclude=__pycache__ --exclude=.pytest_cache \
+    -cf - . | tar -xf - -C "$BUILD_DIR"
+"$VENV/bin/python" -m pip install --quiet --upgrade "$BUILD_DIR[server]"
 [[ -x "$VENV/bin/cmu" ]] || die "installation failed: $VENV/bin/cmu not found"
 
 echo "==> Settings in $DEFAULTS_FILE"
@@ -81,7 +96,11 @@ if [[ ! -f "$DEFAULTS_FILE" ]]; then
 # expose it to the Internet.
 #CMU_HOST=0.0.0.0
 #CMU_PORT=8000
+# The database directory must exist and be writable by the "cmu" user
+# (install.sh creates /var/lib/cmu; for another location, create it and
+# `chown cmu:cmu` it first).
 #CMU_DB_PATH=/var/lib/cmu/server.db
+# Largest accepted sync payload in bytes.
 #CMU_MAX_BODY_BYTES=2097152
 EOF
     chmod 644 "$DEFAULTS_FILE"
@@ -93,10 +112,18 @@ systemctl daemon-reload
 systemctl enable "$UNIT_NAME" >/dev/null
 systemctl restart "$UNIT_NAME"
 
-PORT="$( (set +u; [[ -f "$DEFAULTS_FILE" ]] && . "$DEFAULTS_FILE"; echo "${CMU_PORT:-8000}") )"
+# Probe the address the service actually binds to.
+read -r HOST PORT < <( (set +u; [[ -f "$DEFAULTS_FILE" ]] && . "$DEFAULTS_FILE"; echo "${CMU_HOST:-0.0.0.0} ${CMU_PORT:-8000}") )
+case "$HOST" in
+    ""|0.0.0.0) PROBE_HOST=127.0.0.1 ;;
+    ::|"[::]")  PROBE_HOST="[::1]" ;;
+    *:*)        PROBE_HOST="[$HOST]" ;;   # bare IPv6 address
+    *)          PROBE_HOST="$HOST" ;;
+esac
+HEALTH_URL="http://$PROBE_HOST:$PORT/api/health"
 for _ in $(seq 1 20); do
-    if "$VENV/bin/python" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$PORT/api/health', timeout=1)" 2>/dev/null; then
-        echo "==> Running: http://127.0.0.1:$PORT/api/health is up"
+    if "$VENV/bin/python" -c "import urllib.request; urllib.request.urlopen('$HEALTH_URL', timeout=1)" 2>/dev/null; then
+        echo "==> Running: $HEALTH_URL is up"
         echo "    status:  systemctl status $UNIT_NAME"
         echo "    logs:    journalctl -u $UNIT_NAME -f"
         echo "    clients: cmu config server http://<this-host>:$PORT"
@@ -104,6 +131,7 @@ for _ in $(seq 1 20); do
     fi
     sleep 0.5
 done
-echo "warning: the service was started but /api/health did not answer within 10s." >&2
-echo "         journalctl -u $UNIT_NAME -n 50" >&2
+echo "error: the service was started but $HEALTH_URL did not answer within 10s" >&2
+echo "       (systemctl is-active $UNIT_NAME: $(systemctl is-active "$UNIT_NAME" || true))" >&2
+echo "       journalctl -u $UNIT_NAME -n 50" >&2
 exit 1

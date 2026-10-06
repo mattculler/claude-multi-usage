@@ -1,6 +1,6 @@
 [Unit]
 Description=claude-multi-usage sync server
-Documentation=https://github.com/hunknownn/claude-multi-usage
+Documentation=https://github.com/mattculler/claude-multi-usage
 After=network-online.target
 Wants=network-online.target
 
@@ -24,13 +24,13 @@ ExecStart=/opt/cmu/venv/bin/cmu server start --host ${CMU_HOST} --port ${CMU_POR
 Restart=on-failure
 RestartSec=5
 
-# Sandboxing. None of this changes how the server behaves; it only limits
-# what the process could touch if it misbehaved.
+# Light sandboxing that does not affect the server: no privilege escalation,
+# a private /tmp, and /usr, /boot and /etc read-only. /var, /srv, /opt and
+# /home stay as they are, so CMU_DB_PATH may point anywhere the "cmu" user
+# can write.
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/cmu
+ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target
