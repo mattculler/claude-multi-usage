@@ -60,10 +60,89 @@ def test_project_name_falls_back_to_directory_heuristic_without_cwd(fake_home):
                "message": {"role": "user", "content": "hi"}}]
     _write_session(fake_home.projects / "-Users-bob-workspace-tool-tool" / "s.jsonl", no_cwd)
     _write_session(fake_home.projects / "-home-bob-src-other" / "s.jsonl", no_cwd)
+    _write_session(fake_home.projects / "C--Users-bob-src-winproj" / "s.jsonl", no_cwd)
     names = {p.name for p in parser.parse_projects()}
     assert "tool" in names          # "workspace" heuristic, duplicate segment collapsed
     assert "other" in names         # encoded absolute path: last segment only
-    assert not any(n.startswith("-") for n in names)
+    assert "winproj" in names       # Windows drive encoding: last segment only
+    assert not any(n.startswith("-") or n.startswith("C--") for n in names)
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("-home-me-src-thing", "thing"),
+    ("C--Users-bob-src-proj", "proj"),
+    ("-Users-me-workspace-apr-backend-apr-backend", "apr-backend"),
+    ("-Users-me-workspace-clients-acme-app", "clients-acme-app"),
+])
+def test_project_name_from_dir(raw, expected):
+    assert parser._project_name_from_dir(raw) == expected
+
+
+def test_empty_project_directories_are_ignored(fake_home):
+    (fake_home.projects / "-home-alice-src-stale").mkdir()
+    (fake_home.projects / "-home-alice-src-stale2").mkdir()
+    (fake_home.projects / "-home-alice-src-stale2" / "notes.txt").write_text("x")
+    names = {p.name for p in parser.parse_projects()}
+    assert names == {"myproj", "secret-client-acme"}
+
+
+def test_sessions_in_one_directory_are_named_by_their_own_cwd(fake_home):
+    """'/home/me/foo.bar' and '/home/me/foo-bar' share the encoded directory
+    '-home-me-foo-bar'; each session is attributed to its own repository."""
+    d = fake_home.projects / "-home-me-foo-bar"
+    src = fake_home.projects / "-home-alice-workspace-myproj" / "aaaa.jsonl"
+    entries = [json.loads(line) for line in src.read_text().splitlines()]
+    for i, cwd in enumerate(["/home/me/foo.bar", "/home/me/foo-bar"]):
+        copy = [dict(e) for e in entries]
+        for e in copy:
+            e["cwd"] = cwd
+            if e["type"] == "assistant":
+                e["message"] = dict(e["message"], id=f"{i}-" + e["message"]["id"])
+        _write_session(d / f"{i:04d}.jsonl", copy)
+    projects = {p.name: p for p in parser.parse_projects()}
+    assert projects["foo.bar"].output_tokens == fake_home.today_output_tokens
+    assert projects["foo-bar"].output_tokens == fake_home.today_output_tokens
+    assert projects["foo.bar"].session_count == projects["foo-bar"].session_count == 1
+
+
+def test_worktree_sessions_count_towards_their_repository(fake_home):
+    src = fake_home.projects / "-home-alice-workspace-myproj" / "aaaa.jsonl"
+    entries = [json.loads(line) for line in src.read_text().splitlines()]
+    for e in entries:
+        e["cwd"] = "/home/alice/workspace/myproj/.claude/worktrees/fluffy-otter"
+        if e["type"] == "assistant":
+            e["message"] = dict(e["message"], id="wt-" + e["message"]["id"])
+    _write_session(fake_home.projects / "-home-alice-workspace-myproj--claude-worktrees-fluffy-otter"
+                   / "w.jsonl", entries)
+    projects = {p.name: p for p in parser.parse_projects()}
+    assert "fluffy-otter" not in projects
+    assert projects["myproj"].session_count == 2
+    assert projects["myproj"].output_tokens == 2 * fake_home.today_output_tokens
+
+
+def test_first_and_last_seen_merge_across_naive_and_aware_datetimes(fake_home):
+    """One checkout has timestamps (aware UTC); the other's log has none, so
+    its dates come from the file mtime (naive local)."""
+    import os
+    from datetime import date
+
+    a = [{"type": "user", "timestamp": "2026-01-10T12:00:00.000Z", "cwd": "/a/myrepo",
+          "message": {"role": "user", "content": "hi"}}]
+    b = [{"type": "user", "cwd": "/b/myrepo", "message": {"role": "user", "content": "hi"}}]
+    _write_session(fake_home.projects / "-a-myrepo" / "s.jsonl", a)
+    fb = fake_home.projects / "-b-myrepo" / "s.jsonl"
+    _write_session(fb, b)
+    old = parser.datetime(2025, 6, 1, 12, 0).timestamp()
+    os.utime(fb, (old, old))
+
+    for with_tokens in (True, False):
+        p = {p.name: p for p in parser.parse_projects(with_tokens=with_tokens)}["myrepo"]
+        assert p.session_count == 2
+        assert p.first_seen.tzinfo is None and p.first_seen.date() == date(2025, 6, 1)
+        if with_tokens:
+            assert p.last_seen.tzinfo is not None and p.last_seen.date() == date(2026, 1, 10)
+        else:  # no file is read, so both dates come from mtimes
+            assert p.last_seen.tzinfo is None and p.last_seen >= p.first_seen
 
 
 @pytest.mark.parametrize("cwd,expected", [
@@ -71,6 +150,9 @@ def test_project_name_falls_back_to_directory_heuristic_without_cwd(fake_home):
     ("/home/me/src/my-repo/", "my-repo"),
     ("C:\\Users\\me\\proj", "proj"),
     ("/", "home"),
+    ("/home/me/src/my-repo/.claude/worktrees/fluffy-otter", "my-repo"),
+    ("/home/me/src/my-repo/.claude/worktrees/fluffy-otter/sub", "my-repo"),
+    ("C:\\Users\\me\\proj\\.claude\\worktrees\\wt1", "proj"),
 ])
 def test_repo_name_from_cwd(cwd, expected):
     assert parser._repo_name_from_cwd(cwd) == expected

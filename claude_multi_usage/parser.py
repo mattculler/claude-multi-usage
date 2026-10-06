@@ -210,13 +210,22 @@ def _read_session_cwd(session_file: Path) -> str | None:
     return None
 
 
-def _repo_name_from_cwd(cwd: str) -> str:
-    """Last path component of ``cwd``: '/home/me/src/my-repo' -> 'my-repo'.
+_WORKTREE_MARKER = (".claude", "worktrees")
 
-    Only this short name is displayed and synced; the rest of the path stays
-    on this machine.
+
+def _repo_name_from_cwd(cwd: str) -> str:
+    """Repository name for a session's working directory.
+
+    '/home/me/src/my-repo' -> 'my-repo'. Claude Code worktrees live at
+    '<repo>/.claude/worktrees/<name>' and are attributed to the repository,
+    not the (often randomly named) worktree. Only this short name is
+    displayed and synced; the rest of the path stays on this machine.
     """
     parts = [p for p in re.split(r"[\\/]+", cwd) if p]
+    for i in range(len(parts) - 2):
+        if (parts[i], parts[i + 1]) == _WORKTREE_MARKER:
+            parts = parts[:i]
+            break
     if not parts or cwd.rstrip("\\/") == str(Path.home()):
         return "home"
     return parts[-1]
@@ -238,26 +247,14 @@ def _project_name_from_dir(raw_name: str) -> str:
     except ValueError:
         project_name = raw_name
 
-    # An encoded absolute path ("-home-me-src-thing"): keep only the last
-    # segment rather than exposing the whole path.
-    if not project_name or project_name.startswith("-"):
+    # An encoded absolute path ("-home-me-src-thing", or "C--Users-me-thing"
+    # on Windows): keep only the last segment rather than exposing the whole
+    # path. Hyphenated names get truncated here; this is a guess, used only
+    # for logs that recorded no working directory.
+    if not project_name or project_name.startswith("-") or re.match(r"^[A-Za-z]--", project_name):
         project_name = raw_name.rsplit("-", 1)[-1] or "home"
 
     return project_name.replace("/-", "-")
-
-
-def _project_name(project_dir: Path, session_files: list[Path]) -> str:
-    """Name a project after its repository.
-
-    Uses the last component of the working directory recorded in the
-    project's session files; falls back to guessing from the directory name
-    when no session records a cwd (very old logs, empty directories).
-    """
-    for sf in session_files:
-        cwd = _read_session_cwd(sf)
-        if cwd:
-            return _repo_name_from_cwd(cwd)
-    return _project_name_from_dir(project_dir.name)
 
 
 def _as_aware(dt: datetime) -> datetime:
@@ -265,12 +262,59 @@ def _as_aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.astimezone()
 
 
-def parse_projects(with_tokens: bool = True) -> list:
-    """Parse project directories into per-repository summaries.
+def _summarize_session(session_file: Path, name: str, with_tokens: bool,
+                       calc_cost: bool, seen_msg_ids: set) -> ProjectSummary:
+    """Summarize one session file as a single-session ProjectSummary."""
+    output_tokens = input_tokens = 0
+    cost = 0.0
+    timestamps: list[str] = []
+    if with_tokens:
+        output_tokens, input_tokens, timestamps, cost = _parse_session_tokens(
+            session_file, calc_cost=calc_cost, seen_msg_ids=seen_msg_ids)
 
-    Claude Code keeps one directory per working directory. Directories whose
-    sessions ran in repositories with the same name are aggregated into one
-    summary, so only the short repository name is ever displayed or synced.
+    first_seen = last_seen = None
+    if timestamps:
+        timestamps.sort()
+        try:
+            first_seen = datetime.fromisoformat(timestamps[0].replace("Z", "+00:00"))
+            last_seen = datetime.fromisoformat(timestamps[-1].replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            pass
+    if first_seen is None:
+        try:
+            first_seen = last_seen = datetime.fromtimestamp(session_file.stat().st_mtime)
+        except OSError:
+            pass
+
+    return ProjectSummary(name=name, session_count=1, output_tokens=output_tokens,
+                          input_tokens=input_tokens, first_seen=first_seen,
+                          last_seen=last_seen, cost=cost)
+
+
+def _merge_summary(into: ProjectSummary, other: ProjectSummary) -> None:
+    """Fold ``other`` into ``into`` (same project name)."""
+    into.session_count += other.session_count
+    into.output_tokens += other.output_tokens
+    into.input_tokens += other.input_tokens
+    into.cost += other.cost
+    if other.first_seen and (into.first_seen is None
+                             or _as_aware(other.first_seen) < _as_aware(into.first_seen)):
+        into.first_seen = other.first_seen
+    if other.last_seen and (into.last_seen is None
+                            or _as_aware(other.last_seen) > _as_aware(into.last_seen)):
+        into.last_seen = other.last_seen
+
+
+def parse_projects(with_tokens: bool = True) -> list:
+    """Parse session files into per-repository summaries.
+
+    Every session is named after the repository it ran in (the last component
+    of the working directory it recorded, see _repo_name_from_cwd), and
+    sessions from the same repository are aggregated wherever Claude Code
+    stored them. Claude Code's directory names are a lossy encoding of the
+    path (every non-alphanumeric character becomes '-'), so they are only a
+    fallback for sessions that recorded no cwd. Directories without session
+    files are ignored.
     """
     from .pricing import get_pricing
 
@@ -283,65 +327,16 @@ def parse_projects(with_tokens: bool = True) -> list:
     for project_dir in sorted(PROJECTS_DIR.iterdir()):
         if not project_dir.is_dir():
             continue
-
-        session_files = sorted(project_dir.glob("*.jsonl"))
-        project_name = _project_name(project_dir, session_files)
-        if not project_name:
-            continue
-
-        session_count = len(session_files)
-
-        total_output = 0
-        total_input = 0
-        total_cost = 0.0
-        all_timestamps = []
-
-        if with_tokens:
-            for sf in session_files:
-                out_t, in_t, ts_list, sf_cost = _parse_session_tokens(
-                    sf, calc_cost=has_pricing, seen_msg_ids=seen_msg_ids)
-                total_output += out_t
-                total_input += in_t
-                total_cost += sf_cost
-                all_timestamps.extend(ts_list)
-
-        first_seen = None
-        last_seen = None
-        if all_timestamps:
-            all_timestamps.sort()
-            try:
-                first_seen = datetime.fromisoformat(all_timestamps[0].replace("Z", "+00:00"))
-                last_seen = datetime.fromisoformat(all_timestamps[-1].replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
-                pass
-        elif session_files:
-            mtimes = [f.stat().st_mtime for f in session_files]
-            first_seen = datetime.fromtimestamp(min(mtimes))
-            last_seen = datetime.fromtimestamp(max(mtimes))
-
-        summary = ProjectSummary(
-            name=project_name,
-            session_count=session_count,
-            output_tokens=total_output,
-            input_tokens=total_input,
-            first_seen=first_seen,
-            last_seen=last_seen,
-            cost=total_cost,
-        )
-        existing = by_name.get(project_name)
-        if existing is None:
-            by_name[project_name] = summary
-            continue
-        existing.session_count += summary.session_count
-        existing.output_tokens += summary.output_tokens
-        existing.input_tokens += summary.input_tokens
-        existing.cost += summary.cost
-        if summary.first_seen and (existing.first_seen is None
-                                   or _as_aware(summary.first_seen) < _as_aware(existing.first_seen)):
-            existing.first_seen = summary.first_seen
-        if summary.last_seen and (existing.last_seen is None
-                                  or _as_aware(summary.last_seen) > _as_aware(existing.last_seen)):
-            existing.last_seen = summary.last_seen
+        for session_file in sorted(project_dir.glob("*.jsonl")):
+            cwd = _read_session_cwd(session_file)
+            name = _repo_name_from_cwd(cwd) if cwd else _project_name_from_dir(project_dir.name)
+            if not name:
+                continue
+            summary = _summarize_session(session_file, name, with_tokens, has_pricing, seen_msg_ids)
+            if name in by_name:
+                _merge_summary(by_name[name], summary)
+            else:
+                by_name[name] = summary
 
     return sorted(by_name.values(), key=lambda p: p.output_tokens, reverse=True)
 
