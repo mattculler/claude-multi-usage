@@ -13,25 +13,25 @@ from datetime import datetime
 from typing import Optional
 
 from .index import get_index
-from .pricing import calculate_model_cost, get_pricing
+from .pricing import get_pricing, is_claude_model, usage_cost
 
 
 def daily_costs(date_from: str | None = None, date_to: str | None = None) -> dict:
     """Return {date: {model: {cost, output_tokens, input_tokens, cache_read_tokens,
-    cache_creation_tokens}}} with every message counted once."""
+    cache_creation_tokens}}} for Claude models, with every message counted once."""
     result: dict = defaultdict(lambda: defaultdict(lambda: {
         "cost": 0.0, "output_tokens": 0, "input_tokens": 0,
         "cache_read_tokens": 0, "cache_creation_tokens": 0,
     }))
     for row in get_index().message_usage(date_from, date_to):
+        if not is_claude_model(row["model"]):
+            continue
         entry = result[row["date"]][row["model"]]
         entry["output_tokens"] += row["output"]
         entry["input_tokens"] += row["input"]
         entry["cache_read_tokens"] += row["cache_read"]
         entry["cache_creation_tokens"] += row["cache_create"]
-        entry["cost"] += calculate_model_cost(
-            row["model"], row["input"], row["output"], row["cache_read"], row["cache_create"]
-        )
+        entry["cost"] += usage_cost(row)
     return {d: dict(models) for d, models in result.items()}
 
 

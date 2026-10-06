@@ -218,7 +218,10 @@ def make_projects_table(data: UsageData, limit: int = 10) -> Panel:
     table.add_column("Last Used", style="dim")
 
     for i, project in enumerate(data.projects[:limit], 1):
-        last = project.last_seen.strftime("%Y-%m-%d") if project.last_seen else "-"
+        last_seen = project.last_seen
+        if last_seen is not None and last_seen.tzinfo is not None:
+            last_seen = last_seen.astimezone()  # show the local date
+        last = last_seen.strftime("%Y-%m-%d") if last_seen else "-"
         tokens_str = format_tokens(project.output_tokens) if project.output_tokens > 0 else "-"
         row = [str(i), project.name, str(project.session_count), tokens_str]
         if has_costs:

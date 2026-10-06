@@ -309,8 +309,9 @@ def today():
     """Show today's usage in realtime.
 
     \b
-    Parses session .jsonl files directly, so it works even
-    before stats-cache.json is updated by Claude Code.
+    Uses the session index (see `cmu cost --help`), which picks up
+    new session lines on every run, so it works even before
+    stats-cache.json is updated by Claude Code.
 
     \b
     Shows: sessions, messages, tool calls, tokens by model.
@@ -365,8 +366,8 @@ def hourly():
     """Show today's usage broken down by hour.
 
     \b
-    Parses session .jsonl files to show per-hour token usage,
-    message counts, and session counts for today.
+    Shows per-hour token usage, message counts, and session counts
+    for today from the session index (see `cmu cost --help`).
 
     \b
     Shows: 24-hour bar chart with tokens, messages, sessions per hour.
@@ -393,8 +394,9 @@ def projects(limit: int):
     """Show project usage breakdown sorted by output tokens.
 
     \b
-    Parses all session .jsonl files to calculate per-project
-    token usage. Shows sessions, output tokens, and last used date.
+    Per-repository token usage from the session index (see
+    `cmu cost --help`). Shows sessions, output tokens, cost, and
+    last used date.
     """
     console = Console()
     data = load_usage_data()
@@ -420,15 +422,17 @@ def models():
 
 @main.command(context_settings=CONTEXT_SETTINGS)
 @click.option("--rebuild", is_flag=True,
-              help="Discard the session index and re-read every session file "
-                   "(needed after changing the system time zone).")
+              help="Re-read every session file on disk (needed after changing the "
+                   "system time zone). History of transcripts Claude Code has since "
+                   "deleted is kept.")
 def cost(rebuild: bool):
     """Show monthly cost breakdown.
 
     \b
     Token counts come from an incremental index of the session files
-    (~/.claude-multi-usage/index.db); only files that changed since the
-    last run are read. Prices are applied when displaying, so a pricing
+    (~/.claude-multi-usage/index.db): only files that changed since the
+    last run are read, and transcripts Claude Code deletes stay in the
+    index as history. Prices are applied when displaying, so a pricing
     update takes effect immediately.
 
     \b
@@ -442,8 +446,8 @@ def cost(rebuild: bool):
     console = Console()
     if rebuild:
         from .index import rebuild as rebuild_index
-        rebuild_index()
-        console.print("[dim]Session index discarded; re-reading session files.[/dim]")
+        stats = rebuild_index()
+        console.print(f"[dim]Session index rebuilt: {stats.file_count(include_gone=False)} files re-read.[/dim]")
     costs = get_costs()
     if costs is None:
         console.print()

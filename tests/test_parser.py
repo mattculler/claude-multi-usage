@@ -120,9 +120,9 @@ def test_worktree_sessions_count_towards_their_repository(fake_home):
     assert projects["myproj"].output_tokens == 2 * fake_home.today_output_tokens
 
 
-def test_first_and_last_seen_merge_across_naive_and_aware_datetimes(fake_home):
-    """One checkout has timestamps (aware UTC); the other's log has none, so
-    its dates come from the file mtime (naive local)."""
+def test_first_and_last_seen_merge_across_timestamped_and_mtime_only_logs(fake_home):
+    """One checkout has timestamps; the other's log has none, so its dates
+    come from the file mtime. Both are returned as aware UTC datetimes."""
     import os
     from datetime import date
 
@@ -132,14 +132,14 @@ def test_first_and_last_seen_merge_across_naive_and_aware_datetimes(fake_home):
     _write_session(fake_home.projects / "-a-myrepo" / "s.jsonl", a)
     fb = fake_home.projects / "-b-myrepo" / "s.jsonl"
     _write_session(fb, b)
-    old = parser.datetime(2025, 6, 1, 12, 0).timestamp()
+    old = parser.datetime(2025, 6, 1, 12, 0).timestamp()  # local noon
     os.utime(fb, (old, old))
 
     p = {p.name: p for p in parser.parse_projects()}["myrepo"]
     assert p.session_count == 2
-    assert p.first_seen.date() == date(2025, 6, 1)   # from B's mtime
-    assert p.last_seen.date() == date(2026, 1, 10)   # from A's timestamp
     assert p.first_seen.tzinfo is not None and p.last_seen.tzinfo is not None
+    assert p.first_seen.astimezone().date() == date(2025, 6, 1)   # from B's mtime, local date
+    assert p.last_seen.date() == date(2026, 1, 10)                 # from A's timestamp (UTC)
 
 
 @pytest.mark.parametrize("cwd,expected", [

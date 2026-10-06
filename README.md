@@ -30,7 +30,7 @@ cmu projects           # Usage by project (sorted by output tokens)
 cmu projects -n 5      # Top 5 projects only
 cmu models             # Usage by model
 cmu cost               # Monthly cost breakdown
-cmu cost --rebuild     # Re-read all session files (after a time zone change)
+cmu cost --rebuild     # Re-read the session files on disk (after a time zone change)
 cmu tree               # Grass/tree ASCII art visualization (daily/weekly/monthly/yearly)
 cmu dashboard -d 30    # Last 30 days
 cmu dashboard --from 2026-03-01 --to 2026-03-07   # Date range
@@ -259,7 +259,9 @@ Reads local Claude Code data from `~/.claude/`:
 - `stats-cache.json` — daily activity, model tokens, hourly counts
 - `projects/**/*.jsonl` — session files per project (including subagents)
 
-Session files are read into an incremental index at `~/.claude-multi-usage/index.db`. A file is read again only when it changes, and only the newly appended bytes when it grows, so commands stay fast as history accumulates; files Claude Code deletes drop out of the index. The index stores token counts, not prices. Local dates are fixed when a file is indexed, so after changing the system time zone run `cmu cost --rebuild`.
+Session files are read into an incremental index at `~/.claude-multi-usage/index.db`. A file is read again only when it changes, and only the newly appended bytes when it grew in place, so commands stay fast as history accumulates. Transcripts that Claude Code deletes after its retention period stay in the index as history, so `cmu cost` keeps showing past months. The index stores token counts, not prices. Local dates are fixed when a file is indexed, so after changing the system time zone run `cmu cost --rebuild` (it re-reads the files still on disk; already-deleted transcripts keep their old dates). If the index cannot be written (read-only home directory) the session files are read directly for that run.
+
+Upgrading from a version that kept `~/.claude-multi-usage/cost-cache.json`: that file is no longer read and can be deleted. Days whose transcripts Claude Code had already deleted before the first run of this version are not carried over.
 
 No API keys required. Local data stays local unless you opt in to sync; the only other network access is a fetch of model prices from LiteLLM's GitHub repository, cached for 24 hours.
 

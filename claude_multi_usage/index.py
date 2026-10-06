@@ -6,26 +6,34 @@ of megabytes), so parsing all of them on every command does not scale.
 
 This module keeps a SQLite index in ``~/.claude-multi-usage/index.db``:
 
-* A file is re-read only when its size or mtime changed, and only the bytes
-  appended since the last run when it merely grew (the normal case for the
-  session currently in use). A file that disappeared is dropped from the
-  index, so Claude Code's periodic transcript cleanup is handled.
+* A file is re-read only when its size or mtime changed. When it grew and
+  the bytes before the old end are unchanged (the normal case for the
+  session in use) only the new bytes are read; otherwise it is re-read in
+  full.
+* A file that disappeared (Claude Code deletes old transcripts after its
+  retention period) is marked gone and its rows are kept, so cost history
+  does not roll off with the transcripts. It is re-read if it reappears.
 * One row per assistant message *occurrence*. Claude Code writes one JSONL
-  line per content block, repeating the message id and usage, and resumed
-  sessions copy earlier history into a new file; aggregations therefore
-  count each message id once (the ``owned`` view).
+  line per content block, repeating the message id; the first line carries
+  a placeholder output count and later lines the final one, so the maximum
+  per id is kept. Resumed sessions copy earlier history into a new file;
+  aggregations therefore count each message id once (the ``owned`` view).
 * Token counts are stored, never prices, so a changed pricing table or a
   fix in the cost logic takes effect immediately without any rebuild.
+* Refreshes run in one write transaction, so concurrent cmu processes
+  (the README's shell wrapper backgrounds ``cmu sync``) serialize instead
+  of double counting.
 
 Local dates and hours are computed when a file is indexed; after changing
-the system time zone run ``cmu cost --rebuild``.
+the system time zone run ``cmu cost --rebuild``. If the index cannot be
+opened (read-only home directory) an in-memory index is used for the run.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -45,7 +53,8 @@ from .parser import (
 
 CACHE_DIR = Path.home() / ".claude-multi-usage"
 INDEX_FILE = CACHE_DIR / "index.db"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+_TAIL_BYTES = 256  # bytes remembered from the end of the indexed region
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -53,13 +62,16 @@ CREATE TABLE IF NOT EXISTS files (
     path        TEXT PRIMARY KEY,
     size        INTEGER NOT NULL,
     mtime       REAL NOT NULL,
-    offset      INTEGER NOT NULL,       -- bytes indexed so far (complete lines only)
+    offset      INTEGER NOT NULL,       -- bytes indexed so far
+    tail        BLOB,                   -- last bytes before offset, to detect rewrites
+    gone        INTEGER NOT NULL DEFAULT 0,  -- no longer on disk; rows kept as history
     project_dir TEXT NOT NULL,          -- name of the ~/.claude/projects/<dir>
     is_subagent INTEGER NOT NULL,       -- nested under a session directory
     cwd         TEXT,
     project     TEXT NOT NULL,
     first_ts    TEXT,                   -- naive UTC ISO, comparable as strings
-    last_ts     TEXT
+    last_ts     TEXT,
+    ts_source   TEXT NOT NULL DEFAULT 'log'  -- 'log' or 'mtime' (no timestamped entries yet)
 );
 CREATE TABLE IF NOT EXISTS messages (
     path         TEXT NOT NULL,
@@ -92,13 +104,15 @@ CREATE VIEW IF NOT EXISTS owned AS
       ON o.msg_id = m.msg_id AND o.path = m.path;
 """
 
+_TABLES = ("owned", "lines", "messages", "files", "meta")
+
 
 @dataclass
 class RefreshStats:
     scanned: int = 0      # session files on disk
     indexed: int = 0      # files read in full
     appended: int = 0     # files read from their previous offset
-    removed: int = 0      # files that disappeared
+    retired: int = 0      # files that disappeared (rows kept)
 
 
 def _utc_iso(ts: str) -> str | None:
@@ -124,11 +138,22 @@ def _from_utc_iso(s: str | None) -> datetime | None:
 class SessionIndex:
     def __init__(self, db_path: Path | str = INDEX_FILE):
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.db_path))
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self.fallback_reason: str | None = None
+        conn = None
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(str(self.db_path), timeout=60)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+        except (OSError, sqlite3.Error) as e:
+            if conn is not None:
+                conn.close()
+            # Read-only or otherwise unusable location: index in memory for this run.
+            conn = sqlite3.connect(":memory:")
+            conn.row_factory = sqlite3.Row
+            self.fallback_reason = f"{self.db_path}: {e}"
+        self._conn = conn
         self._ensure_schema()
 
     # -- schema -----------------------------------------------------------
@@ -136,19 +161,18 @@ class SessionIndex:
     def _ensure_schema(self) -> None:
         self._conn.executescript(_SCHEMA)
         row = self._conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
-        if row is None:
-            self._conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
-                               (str(SCHEMA_VERSION),))
-            self._conn.commit()
-        elif row["value"] != str(SCHEMA_VERSION):
+        if row is not None and row["value"] != str(SCHEMA_VERSION):
             # An older index: start over rather than guess at a migration.
             self._conn.executescript(
-                "DROP VIEW IF EXISTS owned; DROP TABLE IF EXISTS lines; "
-                "DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS meta;"
+                "DROP VIEW IF EXISTS owned;" + "".join(f"DROP TABLE IF EXISTS {t};" for t in _TABLES[1:])
             )
             self._conn.executescript(_SCHEMA)
-            self._conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
-                               (str(SCHEMA_VERSION),))
+            row = None
+        if row is None:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+                (str(SCHEMA_VERSION),),
+            )
             self._conn.commit()
 
     def close(self) -> None:
@@ -156,44 +180,97 @@ class SessionIndex:
 
     # -- refresh ----------------------------------------------------------
 
+    def _scan(self) -> dict[str, tuple[int, float, str, bool]]:
+        projects_dir = _parser.PROJECTS_DIR
+        on_disk: dict[str, tuple[int, float, str, bool]] = {}
+        if not projects_dir.exists():
+            return on_disk
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            for f in project_dir.rglob("*.jsonl"):
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                on_disk[str(f)] = (st.st_size, st.st_mtime, project_dir.name, f.parent != project_dir)
+        return on_disk
+
     def refresh(self) -> RefreshStats:
         """Bring the index up to date with the files on disk."""
         stats = RefreshStats()
-        projects_dir = _parser.PROJECTS_DIR
-        on_disk: dict[str, tuple[int, float, str, bool]] = {}
-        if projects_dir.exists():
-            for project_dir in projects_dir.iterdir():
-                if not project_dir.is_dir():
-                    continue
-                for f in project_dir.rglob("*.jsonl"):
-                    try:
-                        st = f.stat()
-                    except OSError:
-                        continue
-                    on_disk[str(f)] = (st.st_size, st.st_mtime, project_dir.name, f.parent != project_dir)
+        on_disk = self._scan()
         stats.scanned = len(on_disk)
 
-        known = {
-            row["path"]: row
-            for row in self._conn.execute("SELECT path, size, mtime, offset FROM files")
-        }
+        # One write transaction: a second process refreshing at the same time
+        # waits here and then sees the updated offsets instead of re-adding
+        # the same appended lines.
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            known = {
+                row["path"]: row
+                for row in self._conn.execute("SELECT path, size, mtime, offset, tail, gone FROM files")
+            }
 
-        for path in set(known) - set(on_disk):
-            self._forget(path)
-            stats.removed += 1
+            for path, row in known.items():
+                if path not in on_disk and not row["gone"]:
+                    self._conn.execute("UPDATE files SET gone = 1 WHERE path = ?", (path,))
+                    stats.retired += 1
 
-        for path, (size, mtime, project_dir_name, is_subagent) in on_disk.items():
-            row = known.get(path)
-            if row is not None and row["size"] == size and row["mtime"] == mtime:
-                continue
-            if row is not None and size >= row["offset"]:
-                self._index_file(path, size, mtime, project_dir_name, is_subagent, offset=row["offset"])
-                stats.appended += 1
-            else:
+            for path, (size, mtime, project_dir_name, is_subagent) in on_disk.items():
+                row = known.get(path)
+                if row is not None and not row["gone"]:
+                    if row["size"] == size and row["mtime"] == mtime:
+                        continue
+                    if size >= row["offset"] and self._prefix_unchanged(path, row["offset"], row["tail"]):
+                        self._index_file(path, size, mtime, project_dir_name, is_subagent,
+                                         offset=row["offset"])
+                        stats.appended += 1
+                        continue
                 self._forget(path)
                 self._index_file(path, size, mtime, project_dir_name, is_subagent, offset=0)
                 stats.indexed += 1
 
+            self._inherit_projects()
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
+        return stats
+
+    def reindex_present(self) -> RefreshStats:
+        """Re-read every file on disk; rows of files that are gone are kept."""
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute("DELETE FROM messages WHERE path IN (SELECT path FROM files WHERE gone = 0)")
+            self._conn.execute("DELETE FROM lines WHERE path IN (SELECT path FROM files WHERE gone = 0)")
+            self._conn.execute("DELETE FROM files WHERE gone = 0")
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
+        return self.refresh()
+
+    @staticmethod
+    def _prefix_unchanged(path: str, offset: int, tail: bytes | None) -> bool:
+        """True if the bytes just before ``offset`` are what was indexed last time."""
+        if offset == 0:
+            return True
+        if not tail:
+            return False
+        try:
+            with open(path, "rb") as f:
+                f.seek(max(0, offset - len(tail)))
+                return f.read(len(tail)) == tail
+        except OSError:
+            return False
+
+    def _forget(self, path: str) -> None:
+        self._conn.execute("DELETE FROM messages WHERE path = ?", (path,))
+        self._conn.execute("DELETE FROM lines WHERE path = ?", (path,))
+        self._conn.execute("DELETE FROM files WHERE path = ?", (path,))
+
+    def _inherit_projects(self) -> None:
         # A file that recorded no cwd (some subagent transcripts) belongs to
         # the same project as its siblings in the directory; only when no
         # sibling knows either does the directory-name guess stand.
@@ -206,26 +283,21 @@ class SessionIndex:
                    SELECT 1 FROM files s
                    WHERE s.project_dir = files.project_dir AND s.cwd IS NOT NULL)"""
         )
-        self._conn.commit()
-        return stats
-
-    def _forget(self, path: str) -> None:
-        self._conn.execute("DELETE FROM messages WHERE path = ?", (path,))
-        self._conn.execute("DELETE FROM lines WHERE path = ?", (path,))
-        self._conn.execute("DELETE FROM files WHERE path = ?", (path,))
 
     def _index_file(self, path: str, size: int, mtime: float, project_dir_name: str,
                     is_subagent: bool, offset: int) -> None:
         existing = self._conn.execute(
-            "SELECT cwd, first_ts, last_ts FROM files WHERE path = ?", (path,)
+            "SELECT cwd, first_ts, last_ts, ts_source FROM files WHERE path = ?", (path,)
         ).fetchone() if offset else None
         cwd = existing["cwd"] if existing else None
-        first_ts = existing["first_ts"] if existing else None
-        last_ts = existing["last_ts"] if existing else None
+        first_ts = last_ts = None
+        if existing and existing["ts_source"] == "log":
+            first_ts, last_ts = existing["first_ts"], existing["last_ts"]
 
         line_counts: dict[tuple[str, int], list[int]] = defaultdict(lambda: [0, 0, 0])
         message_rows: list[tuple] = []
         new_offset = offset
+        tail = b""
 
         try:
             with open(path, "rb") as f:
@@ -235,14 +307,17 @@ class SessionIndex:
                     raw = f.readline()
                     if not raw:
                         break
-                    if not raw.endswith(b"\n"):
-                        break  # partial line still being written; pick it up next time
-                    new_offset += len(raw)
-                    line_no += 1
                     try:
                         d = json.loads(raw.decode("utf-8", errors="replace"))
                     except json.JSONDecodeError:
+                        if not raw.endswith(b"\n"):
+                            break  # mid-write; pick it up next time
+                        new_offset += len(raw)
+                        line_no += 1
                         continue
+                    # A complete JSON line counts even without a trailing newline.
+                    new_offset += len(raw)
+                    line_no += 1
                     if not isinstance(d, dict):
                         continue
 
@@ -290,34 +365,43 @@ class SessionIndex:
                             continue
                         key = (local.strftime("%Y-%m-%d"), local.hour)
                         message_rows.append(self._message_row(path, message, key, f"{offset}:{line_no}"))
+
+                start = max(0, new_offset - _TAIL_BYTES)
+                f.seek(start)
+                tail = f.read(new_offset - start)
         except OSError:
             return
 
+        ts_source = "log"
         if first_ts is None:
-            # No timestamped entries at all: fall back to the file's mtime.
-            stamp = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-            first_ts = last_ts = stamp
+            # No timestamped entries yet: fall back to the file's mtime until some appear.
+            first_ts = last_ts = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+            ts_source = "mtime"
 
-        if cwd:
-            project = _repo_name_from_cwd(cwd)
-        else:
-            project = _project_name_from_dir(project_dir_name)
+        project = _repo_name_from_cwd(cwd) if cwd else _project_name_from_dir(project_dir_name)
 
         self._conn.execute(
-            """INSERT INTO files (path, size, mtime, offset, project_dir, is_subagent, cwd, project,
-                                  first_ts, last_ts)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO files (path, size, mtime, offset, tail, gone, project_dir, is_subagent,
+                                  cwd, project, first_ts, last_ts, ts_source)
+               VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(path) DO UPDATE SET
                  size = excluded.size, mtime = excluded.mtime, offset = excluded.offset,
-                 cwd = excluded.cwd, project = excluded.project,
-                 first_ts = excluded.first_ts, last_ts = excluded.last_ts""",
-            (path, size, mtime, new_offset, project_dir_name, int(is_subagent), cwd, project,
-             first_ts, last_ts),
+                 tail = excluded.tail, gone = 0, cwd = excluded.cwd, project = excluded.project,
+                 first_ts = excluded.first_ts, last_ts = excluded.last_ts,
+                 ts_source = excluded.ts_source""",
+            (path, size, mtime, new_offset, tail, project_dir_name, int(is_subagent), cwd, project,
+             first_ts, last_ts, ts_source),
         )
+        # Later lines of a streamed message carry the final usage; keep the maximum.
         self._conn.executemany(
-            """INSERT OR IGNORE INTO messages
+            """INSERT INTO messages
                (path, msg_id, model, date, hour, input, output, cache_read, cache_create)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(path, msg_id) DO UPDATE SET
+                 input = MAX(input, excluded.input),
+                 output = MAX(output, excluded.output),
+                 cache_read = MAX(cache_read, excluded.cache_read),
+                 cache_create = MAX(cache_create, excluded.cache_create)""",
             message_rows,
         )
         self._conn.executemany(
@@ -353,8 +437,10 @@ class SessionIndex:
                       by_hour: bool = False) -> Iterator[sqlite3.Row]:
         """Token sums per (date[, hour], model) over messages counted once.
 
-        Messages with any token count above the tiered-pricing threshold are
-        returned individually (``big`` = 1) so costs can be computed exactly.
+        Rows with ``big`` = 0 are sums of messages that are each below the
+        tiered-pricing threshold, so their cost is linear in the sum (price
+        them untiered). Messages with any count above the threshold are
+        returned individually with ``big`` = 1 so tiered cost is exact.
         """
         from .pricing import TIERED_THRESHOLD as T
 
@@ -390,7 +476,7 @@ class SessionIndex:
 
     def hourly(self, date: str) -> list[HourlyUsage]:
         """Per-hour usage for one local day (messages, sessions, output tokens, cost)."""
-        from .pricing import calculate_model_cost, get_pricing
+        from .pricing import get_pricing, usage_cost
 
         has_pricing = get_pricing() is not None
         hours = {h: {"messages": 0, "sessions": set(), "tokens": 0, "cost": 0.0} for h in range(24)}
@@ -406,9 +492,7 @@ class SessionIndex:
             h = hours[row["hour"]]
             h["tokens"] += row["output"]
             if has_pricing:
-                h["cost"] += calculate_model_cost(
-                    row["model"], row["input"], row["output"], row["cache_read"], row["cache_create"]
-                )
+                h["cost"] += usage_cost(row)
         return [
             HourlyUsage(hour=h, message_count=v["messages"], session_count=len(v["sessions"]),
                         tokens=v["tokens"], cost=v["cost"])
@@ -438,7 +522,7 @@ class SessionIndex:
 
     def projects(self) -> list[ProjectSummary]:
         """Per-repository summaries: sessions, tokens, cost, first/last seen."""
-        from .pricing import calculate_model_cost, get_pricing
+        from .pricing import TIERED_THRESHOLD as T, get_pricing, usage_cost
 
         has_pricing = get_pricing() is not None
         summaries: dict[str, ProjectSummary] = {}
@@ -452,16 +536,15 @@ class SessionIndex:
                 name=row["project"], session_count=row["sessions"],
                 first_seen=_from_utc_iso(row["first_ts"]), last_seen=_from_utc_iso(row["last_ts"]),
             )
-        from .pricing import TIERED_THRESHOLD as T
         for row in self._conn.execute(
             """SELECT f.project, o.model,
                       SUM(o.input) AS input, SUM(o.output) AS output,
-                      SUM(o.cache_read) AS cache_read, SUM(o.cache_create) AS cache_create
+                      SUM(o.cache_read) AS cache_read, SUM(o.cache_create) AS cache_create, 0 AS big
                FROM owned o JOIN files f ON f.path = o.path
                WHERE o.input <= ? AND o.output <= ? AND o.cache_read <= ? AND o.cache_create <= ?
                GROUP BY f.project, o.model
                UNION ALL
-               SELECT f.project, o.model, o.input, o.output, o.cache_read, o.cache_create
+               SELECT f.project, o.model, o.input, o.output, o.cache_read, o.cache_create, 1 AS big
                FROM owned o JOIN files f ON f.path = o.path
                WHERE o.input > ? OR o.output > ? OR o.cache_read > ? OR o.cache_create > ?""",
             (T, T, T, T, T, T, T, T),
@@ -472,13 +555,13 @@ class SessionIndex:
             s.output_tokens += row["output"]
             s.input_tokens += row["input"] + row["cache_read"] + row["cache_create"]
             if has_pricing:
-                s.cost += calculate_model_cost(
-                    row["model"], row["input"], row["output"], row["cache_read"], row["cache_create"]
-                )
+                s.cost += usage_cost(row)
         return sorted(summaries.values(), key=lambda p: p.output_tokens, reverse=True)
 
-    def file_count(self) -> int:
-        return self._conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    def file_count(self, include_gone: bool = True) -> int:
+        if include_gone:
+            return self._conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        return self._conn.execute("SELECT COUNT(*) FROM files WHERE gone = 0").fetchone()[0]
 
 
 # -- process-wide instance -------------------------------------------------
@@ -491,19 +574,22 @@ def get_index() -> SessionIndex:
     global _instance
     if _instance is None:
         idx = SessionIndex(INDEX_FILE)
+        if idx.fallback_reason:
+            print(f"cmu: session index unavailable ({idx.fallback_reason}); "
+                  "reading session files directly this run", file=sys.stderr)
         idx.refresh()
         _instance = idx
     return _instance
 
 
-def rebuild() -> None:
-    """Delete the index so the next use re-reads every session file."""
+def rebuild() -> SessionIndex:
+    """Re-read every session file on disk (e.g. after a time zone change).
+
+    Rows of transcripts that Claude Code has already deleted are kept as
+    they are, since there is nothing left to re-read them from.
+    """
     global _instance
-    if _instance is not None:
-        _instance.close()
-        _instance = None
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            os.remove(f"{INDEX_FILE}{suffix}")
-        except FileNotFoundError:
-            pass
+    if _instance is None:
+        _instance = SessionIndex(INDEX_FILE)
+    _instance.reindex_present()
+    return _instance

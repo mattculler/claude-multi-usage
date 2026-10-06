@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_multi_usage import config, index, parser, pricing
+from claude_multi_usage import cli, config, cost_cache, dashboard, index, parser, pricing, tree
 
 MODEL = "claude-sonnet-4-5-20250929"
 PRICING = {
@@ -78,7 +78,19 @@ def fake_home(tmp_path, monkeypatch):
     # Rich reads COLUMNS when stdout is not a terminal; keep table cells unwrapped.
     monkeypatch.setenv("COLUMNS", "140")
 
-    now_local = datetime.now().astimezone()
+    # Freeze "now" for every module that asks, so a run that straddles local
+    # midnight sees the same "today" as the fixture's timestamps.
+    frozen = datetime.now()
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen.astimezone(tz) if tz is not None else frozen
+
+    for mod in (parser, cost_cache, cli, dashboard, tree, index):
+        monkeypatch.setattr(mod, "datetime", FrozenDatetime)
+
+    now_local = frozen.astimezone()
     today = now_local.strftime("%Y-%m-%d")
     yday_noon = (now_local - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
     yday = yday_noon.strftime("%Y-%m-%d")
