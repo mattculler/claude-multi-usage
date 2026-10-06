@@ -42,33 +42,65 @@ cmu config show        # Show current configuration
 
 Collect usage data from multiple machines into a central server.
 
+> **Warning: the server has no authentication.** Anyone who can reach its port can read every device's data, overwrite any device's data, or add themselves to any key group. Run it only on a private network (LAN, VPN, Tailscale) and never expose it to the Internet. Keys group devices for display; they are labels, not credentials.
+
+### What gets synced
+
+`cmu sync` sends: hostname, alias, your keys, per-day message/session/tool-call counts, per-day and cumulative token counts by model, an hourly session histogram, today's per-hour tokens, and a project list. Projects are identified by repository name only (the last component of the working directory Claude Code ran in), with session counts, token totals and first/last-seen dates. It never sends prompts, responses, file contents, full paths, or API keys.
+
 ### Server Setup
 
-Choose one of the following:
+**Run directly on a VM (systemd)**
 
-**Docker (recommended)**
+On a Linux host with systemd and Python 3.9+ (`python3-venv` on Debian/Ubuntu), from a checkout of this repository:
+
 ```bash
-docker run -d -p 8000:8000 -v cmu-data:/data ghcr.io/hunknownn/claude-multi-usage:latest
+git clone https://github.com/hunknownn/claude-multi-usage.git
+cd claude-multi-usage
+sudo deploy/systemd/install.sh
 ```
 
-**Kubernetes**
+The script creates a `cmu` system user, installs the package into `/opt/cmu/venv`, keeps the database in `/var/lib/cmu/server.db`, and enables `cmu-server.service` on port 8000. Settings (bind address, port, database path, request size limit) live in `/etc/default/cmu-server`; restart the service after editing. To upgrade, `git pull` and re-run the script. To remove it, `sudo deploy/systemd/install.sh --uninstall`.
+
+```bash
+systemctl status cmu-server
+journalctl -u cmu-server -f
+curl http://localhost:8000/api/health
+```
+
+**Other ways to run it**
+
+<details>
+<summary>Docker</summary>
+
+```bash
+docker run -d -p 127.0.0.1:8000:8000 -v cmu-data:/data ghcr.io/hunknownn/claude-multi-usage:latest
+```
+
+Replace `127.0.0.1` with the LAN address clients should use. Do not publish the port on a public interface.
+</details>
+
+<details>
+<summary>Kubernetes</summary>
+
 ```bash
 kubectl create namespace cmu-server
 kubectl apply -k https://github.com/hunknownn/claude-multi-usage/deploy/k8s/ -n cmu-server
 ```
 
-To expose via Ingress (optional):
+The Service is `ClusterIP`, reachable inside the cluster only. `deploy/k8s/ingress.example.yaml` shows how to expose it through an Ingress; only do that behind an authenticating ingress or on a private network.
+</details>
+
+<details>
+<summary>pip, in the foreground</summary>
+
 ```bash
-curl -O https://raw.githubusercontent.com/hunknownn/claude-multi-usage/main/deploy/k8s/ingress.example.yaml
-# Edit the file — replace your-domain.example.com with your domain
-kubectl apply -f ingress.example.yaml -n cmu-server
+pip install "claude-multi-usage[server]"
+cmu server start --host 0.0.0.0 --port 8000 --db-path ./server.db
 ```
 
-**pip**
-```bash
-pip install claude-multi-usage[server]
-cmu server start --host 0.0.0.0 --port 8000
-```
+Options: `--host`, `--port`, `--db-path PATH` (default `/data/server.db`), `--max-body-bytes N` (reject sync payloads larger than N bytes; default 2 MB). The same settings can be given as `CMU_DB_PATH` and `CMU_MAX_BODY_BYTES` environment variables.
+</details>
 
 ### Client Setup
 
@@ -89,7 +121,7 @@ cmu diff --merged      # Merged into one view
 cmu diff --key my-key  # Filter by specific key
 ```
 
-> Keys are used to group devices. Only devices with the same key can see each other's data. Local commands (`cmu dashboard`, `cmu today`, `cmu cost`, etc.) work without keys.
+> Keys group devices for the `cmu diff` view. They are not access control: the server returns every device's data to anyone who asks (see the warning above). Local commands (`cmu dashboard`, `cmu today`, `cmu cost`, etc.) work without keys or a server.
 
 ### Auto Sync
 
@@ -213,7 +245,7 @@ Reads local Claude Code data from `~/.claude/`:
 - `stats-cache.json` — daily activity, model tokens, hourly counts
 - `projects/**/*.jsonl` — session files per project (including subagents)
 
-No API keys required. Local data stays local unless you opt in to sync.
+No API keys required. Local data stays local unless you opt in to sync; the only other network access is a fetch of model prices from LiteLLM's GitHub repository, cached for 24 hours.
 
 ## Roadmap
 

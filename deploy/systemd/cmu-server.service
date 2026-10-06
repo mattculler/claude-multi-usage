@@ -1,0 +1,36 @@
+[Unit]
+Description=claude-multi-usage sync server
+Documentation=https://github.com/hunknownn/claude-multi-usage
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cmu
+Group=cmu
+WorkingDirectory=/var/lib/cmu
+
+# Defaults. Override in /etc/default/cmu-server (created by install.sh),
+# then `systemctl restart cmu-server`.
+Environment=CMU_HOST=0.0.0.0
+Environment=CMU_PORT=8000
+Environment=CMU_DB_PATH=/var/lib/cmu/server.db
+Environment=CMU_MAX_BODY_BYTES=2097152
+EnvironmentFile=-/etc/default/cmu-server
+
+# The API has no authentication. Bind to a LAN or VPN address and never
+# expose this port to the Internet.
+ExecStart=/opt/cmu/venv/bin/cmu server start --host ${CMU_HOST} --port ${CMU_PORT}
+Restart=on-failure
+RestartSec=5
+
+# Sandboxing. None of this changes how the server behaves; it only limits
+# what the process could touch if it misbehaved.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/cmu
+
+[Install]
+WantedBy=multi-user.target
