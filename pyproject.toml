@@ -35,6 +35,11 @@ server = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
 ]
+dev = [
+    "pytest>=7",
+    "httpx>=0.27",
+    "ruff>=0.4",
+]
 
 [project.urls]
 Homepage = "https://github.com/hunknownn/claude-multi-usage"
@@ -47,3 +52,7 @@ claude-multi-usage = "claude_multi_usage.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["claude_multi_usage*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -12,7 +12,6 @@ from .models import (
     DeviceActivity,
     DeviceModelTokens,
     DeviceProject,
-    DeviceHourlyUsage,
 )
 
 DEFAULT_DB_PATH = Path("/data") / "server.db"
@@ -40,12 +39,12 @@ class Store:
                 FOREIGN KEY (hostname) REFERENCES devices(hostname) ON DELETE CASCADE
             );
         """)
-        # alias 컬럼 마이그레이션
+        # Migration: add the alias column
         try:
             self._conn.execute("SELECT alias FROM devices LIMIT 0")
         except sqlite3.OperationalError:
             self._conn.execute("ALTER TABLE devices ADD COLUMN alias TEXT")
-        # email → key 마이그레이션: 기존 email 컬럼 데이터를 device_keys로 이동
+        # Migration: move legacy email column data into device_keys
         try:
             rows = self._conn.execute(
                 "SELECT hostname, email FROM devices WHERE email IS NOT NULL AND email != ''"
@@ -58,7 +57,7 @@ class Store:
             if rows:
                 self._conn.commit()
         except sqlite3.OperationalError:
-            pass  # email 컬럼이 없는 경우 무시
+            pass  # no email column; nothing to migrate
         self._conn.commit()
 
     def upsert_device(self, payload: SyncPayload) -> None:
@@ -76,7 +75,7 @@ class Store:
             (payload.hostname, payload.synced_at,
              payload.model_dump_json(), payload.alias),
         )
-        # device_keys 업데이트
+        # Update device_keys
         if payload.keys:
             self._conn.execute(
                 "DELETE FROM device_keys WHERE hostname = ?",
@@ -180,11 +179,12 @@ def _merge_payloads(old: SyncPayload, new: SyncPayload) -> SyncPayload:
         daily_model_tokens=_merge_daily_model_tokens(
             old.daily_model_tokens, new.daily_model_tokens
         ),
-        # 누적 데이터: 새 payload에 있으면 사용, 없으면 기존 유지 (하위호환)
+        # Cumulative data: use the new payload's values if present, else keep existing (backward compat)
         model_usage=new.model_usage or old.model_usage,
         projects=_merge_projects(old.projects, new.projects),
         hour_counts=new.hour_counts or old.hour_counts,
         today_hourly=new.today_hourly if new.today_hourly else old.today_hourly,
+        today_hourly_date=new.today_hourly_date if new.today_hourly else old.today_hourly_date,
         total_sessions=max(old.total_sessions, new.total_sessions),
         total_messages=max(old.total_messages, new.total_messages),
         first_session_date=_earlier_date(old.first_session_date, new.first_session_date),

@@ -2,7 +2,7 @@ resources:
   - deployment.yaml
   - service.yaml
   - pvc.yaml
-  # - ingress.yaml  # 필요 시 ingress.example.yaml을 복사하여 도메인 수정 후 추가
+  # - ingress.yaml  # if needed, copy ingress.example.yaml, set your domain, and add it here
 
 images:
   - name: ghcr.io/hunknownn/claude-multi-usage

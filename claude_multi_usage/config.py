@@ -27,7 +27,7 @@ def load_config() -> dict:
             config = json.load(f)
         merged = dict(DEFAULT_CONFIG)
         merged.update(config)
-        # email → keys 마이그레이션
+        # Migrate the legacy "email" field to keys
         if "email" in merged and merged["email"] and not merged.get("keys"):
             merged["keys"] = [{"key": merged["email"], "description": "migrated from email"}]
         merged.pop("email", None)

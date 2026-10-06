@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel
+
+# NOTE: ``Optional[str]`` rather than ``str | None`` - Pydantic evaluates these
+# annotations at import time, and the ``|`` form fails on Python 3.9, which
+# pyproject.toml declares as supported.
 
 
 class DeviceActivity(BaseModel):
@@ -30,8 +36,8 @@ class DeviceProject(BaseModel):
     session_count: int
     output_tokens: int = 0
     input_tokens: int = 0
-    first_seen: str | None = None
-    last_seen: str | None = None
+    first_seen: Optional[str] = None
+    last_seen: Optional[str] = None
 
 
 class DeviceHourlyUsage(BaseModel):
@@ -45,22 +51,24 @@ class SyncPayload(BaseModel):
     """Data pushed from a device to the server."""
     hostname: str
     synced_at: str
-    alias: str | None = None
+    alias: Optional[str] = None
     keys: list[str] = []
     # backward compat: accept email and convert to keys
-    email: str | None = None
+    email: Optional[str] = None
     daily_activity: list[DeviceActivity] = []
     daily_model_tokens: list[DeviceModelTokens] = []
     model_usage: list[DeviceModelUsage] = []
     projects: list[DeviceProject] = []
     hour_counts: dict[str, int] = {}
     today_hourly: list[DeviceHourlyUsage] = []
+    # The local date (on the device) that today_hourly describes
+    today_hourly_date: Optional[str] = None
     total_sessions: int = 0
     total_messages: int = 0
-    first_session_date: str | None = None
+    first_session_date: Optional[str] = None
 
     def model_post_init(self, __context) -> None:
-        # email → keys 마이그레이션
+        # Migrate legacy "email" field to keys
         if self.email and not self.keys:
             self.keys = [self.email]
         self.email = None
@@ -68,7 +76,7 @@ class SyncPayload(BaseModel):
 
 class DeviceInfo(BaseModel):
     hostname: str
-    alias: str | None = None
+    alias: Optional[str] = None
     keys: list[str] = []
     last_synced: str
     total_sessions: int

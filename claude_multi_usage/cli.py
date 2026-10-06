@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import click
 
-from .parser import load_usage_data, parse_today_usage, HourlyUsage
+from .parser import load_usage_data, parse_today_usage, HourlyUsage, UsageData
 from .dashboard import render_dashboard, render_multi_device_dashboard, make_projects_table, make_models_table, make_today_hourly_chart, Console, format_tokens
 from .cost_cache import get_costs
 from .pricing import format_cost
@@ -13,10 +15,20 @@ from .pricing import format_cost
 CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
 
 
-def _build_device_usage_data(device: dict) -> "UsageData":
+def _validate_date(ctx, param, value):
+    """Click callback: require YYYY-MM-DD so bad input is a usage error, not a traceback."""
+    if value is None:
+        return None
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise click.BadParameter("expected a date in YYYY-MM-DD format")
+    return value
+
+
+def _build_device_usage_data(device: dict) -> UsageData:
     """Convert a single device dict (from server API) into UsageData."""
-    from .parser import UsageData, DailyActivity, DailyModelTokens, ModelUsage, ProjectSummary
-    from datetime import datetime
+    from .parser import DailyActivity, DailyModelTokens, ModelUsage, ProjectSummary
 
     def _parse_dt(s):
         if not s:
@@ -66,20 +78,20 @@ def _build_device_usage_data(device: dict) -> "UsageData":
         total_sessions=device.get("total_sessions", 0),
         total_messages=device.get("total_messages", 0),
         first_session_date=device.get("first_session_date"),
+        alias=device.get("alias"),
+        today_hourly=[
+            HourlyUsage(hour=h["hour"], message_count=h["message_count"],
+                        session_count=h["session_count"], tokens=h["tokens"])
+            for h in device.get("today_hourly", [])
+        ],
+        today_hourly_date=device.get("today_hourly_date"),
     )
-    usage_data.alias = device.get("alias")
-    usage_data.today_hourly = [
-        HourlyUsage(hour=h["hour"], message_count=h["message_count"],
-                    session_count=h["session_count"], tokens=h["tokens"])
-        for h in device.get("today_hourly", [])
-    ]
     return usage_data
 
 
-def _merge_devices_usage(devices: list[dict]) -> "UsageData":
+def _merge_devices_usage(devices: list[dict]) -> UsageData:
     """Merge all device dicts into a single aggregated UsageData."""
-    from .parser import UsageData, DailyActivity, DailyModelTokens, ModelUsage, ProjectSummary
-    from datetime import datetime
+    from .parser import DailyActivity, DailyModelTokens, ModelUsage, ProjectSummary
 
     all_activity: dict[str, DailyActivity] = {}
     all_tokens: dict[str, dict[str, int]] = {}
@@ -202,19 +214,19 @@ def _fetch_all_devices(key: str | None = None) -> list[dict]:
 
     if not server_url:
         console.print("[red]Server URL not configured.[/red]")
-        console.print("Run: cmu config --server <url>")
+        console.print("Run: cmu config server <url>")
         raise SystemExit(1)
 
     keys = get_keys()
     if not keys:
         console.print("[red]No keys configured.[/red]")
-        console.print("Run: cmu config --key add <your-key>")
+        console.print("Run: cmu config key add <your-key>")
         raise SystemExit(1)
 
-    # 특정 key가 지정되면 해당 key만, 아니면 등록된 모든 key로 조회
+    # Query only the given key, otherwise every registered key
     query_keys = [key] if key else [k["key"] for k in keys]
 
-    all_devices: dict[str, dict] = {}  # hostname -> device data (중복 제거)
+    all_devices: dict[str, dict] = {}  # hostname -> device data (deduplicated)
     for qk in query_keys:
         try:
             params = urllib.parse.urlencode({"key": qk})
@@ -261,19 +273,20 @@ def main(ctx):
     \b
     Data source:
       Reads ~/.claude/stats-cache.json and session .jsonl files.
-      No API keys or network access required.
+      No API keys required. Network is used only to fetch model pricing
+      from LiteLLM's GitHub repo (cached 24h) and for opt-in `cmu sync`.
     """
     if ctx.invoked_subcommand is None:
         ctx.invoke(dashboard)
 
 
 @main.command(context_settings=CONTEXT_SETTINGS)
-@click.option("--days", "-d", default=14, show_default=True,
+@click.option("--days", "-d", default=14, show_default=True, type=click.IntRange(min=1),
               help="Number of recent days to display in the chart.")
 @click.option("--from", "date_from", default=None, metavar="YYYY-MM-DD",
-              help="Start date for the chart range.")
+              callback=_validate_date, help="Start date for the chart range.")
 @click.option("--to", "date_to", default=None, metavar="YYYY-MM-DD",
-              help="End date for the chart range.")
+              callback=_validate_date, help="End date for the chart range.")
 def dashboard(days: int, date_from: str, date_to: str):
     """Show the full usage dashboard.
 
@@ -302,7 +315,6 @@ def today():
     \b
     Shows: sessions, messages, tool calls, tokens by model.
     """
-    from datetime import datetime
     from rich.table import Table
     from rich.panel import Panel
 
@@ -337,7 +349,7 @@ def today():
             table.add_row(f"Tokens ({short})", format_tokens(tokens))
         table.add_row("Total Tokens", format_tokens(tokens_data.total_tokens))
 
-    # 오늘 비용 계산
+    # Today's cost
     from .cost_cache import _parse_sessions_for_date_range
     from .pricing import get_pricing
     if get_pricing() is not None:
@@ -471,12 +483,12 @@ def cost():
 
 
 @main.command(context_settings=CONTEXT_SETTINGS)
-@click.option("--days", "-d", default=14, show_default=True,
+@click.option("--days", "-d", default=14, show_default=True, type=click.IntRange(min=1),
               help="Number of recent days to display in the chart.")
 @click.option("--from", "date_from", default=None, metavar="YYYY-MM-DD",
-              help="Start date for the chart range.")
+              callback=_validate_date, help="Start date for the chart range.")
 @click.option("--to", "date_to", default=None, metavar="YYYY-MM-DD",
-              help="End date for the chart range.")
+              callback=_validate_date, help="End date for the chart range.")
 @click.option("--merged", is_flag=True,
               help="Merge all devices into one view.")
 @click.option("--key", "filter_key", default=None, metavar="KEY",
@@ -493,14 +505,15 @@ def diff(days: int, date_from: str, date_to: str, merged: bool,
       cmu diff -d 30                 Last 30 days
 
     \b
-    Includes: summary, model usage, daily token chart, and top projects.
-    Hourly heatmap is omitted (cumulative data not synced).
+    Includes: summary, model usage, daily token chart, hourly usage for
+    the day each device last synced, and top projects. Cost estimates are
+    not shown: the server holds token counts only.
     """
     devices = _fetch_all_devices(key=filter_key)
 
     if merged:
         data = _merge_devices_usage(devices)
-        render_dashboard(data, days=days, date_from=date_from, date_to=date_to)
+        render_dashboard(data, days=days, date_from=date_from, date_to=date_to, local=False)
     else:
         devices_data = [_build_device_usage_data(d) for d in devices]
         render_multi_device_dashboard(devices_data, days=days, date_from=date_from, date_to=date_to)
@@ -568,7 +581,7 @@ def config_alias(name: str):
     \b
     Examples:
       cmu config alias macbook-air
-      cmu config alias "회사 데스크탑"
+      cmu config alias "office desktop"
     """
     from .config import set_alias
 
@@ -677,7 +690,6 @@ def sync(quiet: bool):
     import json
     import urllib.request
     import urllib.error
-    from datetime import datetime
     from .config import get_server_url, get_keys, get_alias
 
     console = Console()
@@ -707,6 +719,20 @@ def sync(quiet: bool):
         "alias": get_alias(),
         "keys": key_values,
         "synced_at": datetime.now().isoformat(),
+        # Cumulative figures from stats-cache.json. They are a few hundred
+        # bytes and the diff view's Summary / Model Usage panels need them.
+        "total_sessions": data.total_sessions,
+        "total_messages": data.total_messages,
+        "first_session_date": data.first_session_date,
+        "model_usage": [
+            {"model": m.model, "input_tokens": m.input_tokens,
+             "output_tokens": m.output_tokens, "cache_read_tokens": m.cache_read_tokens,
+             "cache_creation_tokens": m.cache_creation_tokens}
+            for m in data.model_usage
+        ],
+        "hour_counts": {str(k): v for k, v in data.hour_counts.items()},
+        # Which day today_hourly describes, so stale data is labelled correctly
+        "today_hourly_date": datetime.now().strftime("%Y-%m-%d"),
         "today_hourly": [
             {"hour": h.hour, "message_count": h.message_count,
              "session_count": h.session_count, "tokens": h.tokens}
@@ -765,19 +791,16 @@ def tree():
     Examples:
       cmu tree
     """
-    from datetime import datetime, timedelta
+    from datetime import timedelta
     from .tree import (make_daily_grass, make_weekly_garden,
                        make_monthly_forest, make_yearly_ecosystem)
     from .parser import parse_today_hourly
-    from .cost_cache import _parse_sessions_for_date_range, get_costs
-    from .pricing import get_pricing
 
     console = Console()
     data = load_usage_data()
     today = datetime.now()
     today_str = today.strftime("%Y-%m-%d")
 
-    has_pricing = get_pricing() is not None
     costs = get_costs()
     daily_costs = costs[0] if costs else {}
 
@@ -816,7 +839,6 @@ def tree():
     console.print()
 
     # -- Monthly (days of current month) --
-    first_of_month = today.replace(day=1)
     monthly_days = []
     for day_num in range(1, today.day + 1):
         d = today.replace(day=day_num).strftime("%Y-%m-%d")
@@ -847,13 +869,15 @@ def tree():
             for date_str, models in daily_costs.items()
             if date_str.startswith(month_prefix)
         )
-        # 이번 달은 오늘 realtime 데이터 포함
+        # The current month includes today's realtime data when the cached
+        # sources (stats-cache / cost cache) do not already contain it.
         if m == today.month:
             today_in_stats = any(
                 t.date == today_str for t in data.daily_model_tokens
             )
             if not today_in_stats and today_tokens > 0:
                 month_tokens += today_tokens
+            if today_str not in daily_costs:
                 month_cost += today_cost
         yearly_data.append((month_names[m - 1], month_tokens, month_cost))
 
