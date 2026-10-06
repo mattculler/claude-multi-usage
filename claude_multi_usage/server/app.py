@@ -76,17 +76,26 @@ class BodySizeLimitMiddleware:
                 break
 
         received = 0
+        rejected = False
 
         async def limited_receive():
-            nonlocal received
+            nonlocal received, rejected
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
                 if received > max_bytes:
+                    rejected = True
                     raise HTTPException(status_code=413, detail=detail)
             return message
 
-        await self.app(scope, limited_receive, send)
+        async def closing_send(message):
+            # Once a body has been refused, ask the server to close the
+            # connection instead of draining whatever the client keeps sending.
+            if rejected and message["type"] == "http.response.start":
+                message = {**message, "headers": _with_connection_close(message.get("headers", []))}
+            await send(message)
+
+        await self.app(scope, limited_receive, closing_send)
 
     @staticmethod
     async def _reject(send, detail: str):
@@ -94,12 +103,18 @@ class BodySizeLimitMiddleware:
         await send({
             "type": "http.response.start",
             "status": 413,
-            "headers": [
+            "headers": _with_connection_close([
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode()),
-            ],
+            ]),
         })
         await send({"type": "http.response.body", "body": body})
+
+
+def _with_connection_close(headers) -> list:
+    kept = [(k, v) for k, v in headers if k.lower() != b"connection"]
+    kept.append((b"connection", b"close"))
+    return kept
 
 
 @asynccontextmanager

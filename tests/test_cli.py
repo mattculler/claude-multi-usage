@@ -66,6 +66,26 @@ def test_config_roundtrip(fake_home):
     assert config.get_keys() == []
 
 
+def test_server_start_options(fake_home, monkeypatch):
+    import os
+    import sys
+    import types
+
+    calls = []
+    monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: calls.append((a, k))))
+    monkeypatch.delenv("CMU_MAX_BODY_BYTES", raising=False)
+    monkeypatch.delenv("CMU_DB_PATH", raising=False)
+
+    assert CliRunner().invoke(cli.main, ["server", "start", "--max-body-bytes", "0"]).exit_code == 2
+
+    result = CliRunner().invoke(cli.main, ["server", "start", "--host", "10.0.0.5", "--port", "9000",
+                                           "--db-path", "x.db", "--max-body-bytes", "500"])
+    assert result.exit_code == 0, result.output
+    assert os.environ["CMU_MAX_BODY_BYTES"] == "500"
+    assert os.environ["CMU_DB_PATH"] == "x.db"
+    assert calls == [(("claude_multi_usage.server.app:app",), {"host": "10.0.0.5", "port": 9000})]
+
+
 def test_sync_without_config_fails_cleanly(fake_home):
     result = CliRunner().invoke(cli.main, ["sync"])
     assert result.exit_code == 1
