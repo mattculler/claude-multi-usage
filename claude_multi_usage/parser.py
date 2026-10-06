@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import socket
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -188,8 +189,89 @@ def _parse_session_tokens(session_file: Path, calc_cost: bool = False,
     return output_tokens, input_tokens, timestamps, cost
 
 
+def _read_session_cwd(session_file: Path) -> str | None:
+    """Return the working directory recorded in a session file, if any.
+
+    Claude Code stamps nearly every entry with the session's ``cwd``, and the
+    first such entry is within the first few lines, so this stops early.
+    """
+    try:
+        with open(session_file) as f:
+            for line in f:
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                cwd = d.get("cwd")
+                if isinstance(cwd, str) and cwd:
+                    return cwd
+    except (OSError, IOError):
+        pass
+    return None
+
+
+def _repo_name_from_cwd(cwd: str) -> str:
+    """Last path component of ``cwd``: '/home/me/src/my-repo' -> 'my-repo'.
+
+    Only this short name is displayed and synced; the rest of the path stays
+    on this machine.
+    """
+    parts = [p for p in re.split(r"[\\/]+", cwd) if p]
+    if not parts or cwd.rstrip("\\/") == str(Path.home()):
+        return "home"
+    return parts[-1]
+
+
+def _project_name_from_dir(raw_name: str) -> str:
+    """Fallback: guess a project name from the encoded directory name.
+
+    Claude Code names project directories after the working directory with
+    path separators (and other punctuation) replaced by '-', so the original
+    path cannot be recovered reliably. Only used when no session file in the
+    directory records a ``cwd``.
+    """
+    parts = raw_name.split("-")
+    try:
+        ws_idx = parts.index("workspace")
+        path_parts = "-".join(parts[ws_idx + 1:]) if ws_idx + 1 < len(parts) else raw_name
+        project_name = _deduplicate_project_name(path_parts)
+    except ValueError:
+        project_name = raw_name
+
+    # An encoded absolute path ("-home-me-src-thing"): keep only the last
+    # segment rather than exposing the whole path.
+    if not project_name or project_name.startswith("-"):
+        project_name = raw_name.rsplit("-", 1)[-1] or "home"
+
+    return project_name.replace("/-", "-")
+
+
+def _project_name(project_dir: Path, session_files: list[Path]) -> str:
+    """Name a project after its repository.
+
+    Uses the last component of the working directory recorded in the
+    project's session files; falls back to guessing from the directory name
+    when no session records a cwd (very old logs, empty directories).
+    """
+    for sf in session_files:
+        cwd = _read_session_cwd(sf)
+        if cwd:
+            return _repo_name_from_cwd(cwd)
+    return _project_name_from_dir(project_dir.name)
+
+
+def _as_aware(dt: datetime) -> datetime:
+    """Make naive datetimes (from file mtimes) comparable with aware ones."""
+    return dt if dt.tzinfo is not None else dt.astimezone()
+
+
 def parse_projects(with_tokens: bool = True) -> list:
-    """Parse project directories to get project summaries."""
+    """Parse project directories into per-repository summaries.
+
+    Claude Code keeps one directory per working directory. Directories whose
+    sessions ran in repositories with the same name are aggregated into one
+    summary, so only the short repository name is ever displayed or synced.
+    """
     from .pricing import get_pricing
 
     if not PROJECTS_DIR.exists():
@@ -197,29 +279,16 @@ def parse_projects(with_tokens: bool = True) -> list:
 
     has_pricing = get_pricing() is not None
     seen_msg_ids: set = set()
-    projects = []
+    by_name: dict[str, ProjectSummary] = {}
     for project_dir in sorted(PROJECTS_DIR.iterdir()):
         if not project_dir.is_dir():
             continue
 
-        raw_name = project_dir.name
-        parts = raw_name.split("-")
-        try:
-            ws_idx = parts.index("workspace")
-            path_parts = "-".join(parts[ws_idx + 1:]) if ws_idx + 1 < len(parts) else raw_name
-            project_name = _deduplicate_project_name(path_parts)
-        except ValueError:
-            project_name = raw_name
-
-        if not project_name or project_name.startswith("-Users"):
-            project_name = raw_name.rsplit("-", 1)[-1] or "home"
-
-        project_name = project_name.replace("/-", "-")
-
+        session_files = sorted(project_dir.glob("*.jsonl"))
+        project_name = _project_name(project_dir, session_files)
         if not project_name:
             continue
 
-        session_files = list(project_dir.glob("*.jsonl"))
         session_count = len(session_files)
 
         total_output = 0
@@ -250,7 +319,7 @@ def parse_projects(with_tokens: bool = True) -> list:
             first_seen = datetime.fromtimestamp(min(mtimes))
             last_seen = datetime.fromtimestamp(max(mtimes))
 
-        projects.append(ProjectSummary(
+        summary = ProjectSummary(
             name=project_name,
             session_count=session_count,
             output_tokens=total_output,
@@ -258,9 +327,23 @@ def parse_projects(with_tokens: bool = True) -> list:
             first_seen=first_seen,
             last_seen=last_seen,
             cost=total_cost,
-        ))
+        )
+        existing = by_name.get(project_name)
+        if existing is None:
+            by_name[project_name] = summary
+            continue
+        existing.session_count += summary.session_count
+        existing.output_tokens += summary.output_tokens
+        existing.input_tokens += summary.input_tokens
+        existing.cost += summary.cost
+        if summary.first_seen and (existing.first_seen is None
+                                   or _as_aware(summary.first_seen) < _as_aware(existing.first_seen)):
+            existing.first_seen = summary.first_seen
+        if summary.last_seen and (existing.last_seen is None
+                                  or _as_aware(summary.last_seen) > _as_aware(existing.last_seen)):
+            existing.last_seen = summary.last_seen
 
-    return sorted(projects, key=lambda p: p.output_tokens, reverse=True)
+    return sorted(by_name.values(), key=lambda p: p.output_tokens, reverse=True)
 
 
 def parse_today_hourly() -> list[HourlyUsage]:

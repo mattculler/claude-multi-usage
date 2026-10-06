@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from claude_multi_usage import cost_cache, parser
@@ -24,10 +26,67 @@ def test_projects_dedup_and_name_derivation(fake_home):
     projects = {p.name: p for p in parser.parse_projects()}
     assert projects["myproj"].output_tokens == fake_home.today_output_tokens
     assert projects["myproj"].cost == pytest.approx(fake_home.today_cost)
-    # Paths without a "workspace" segment keep the full encoded path as the name
-    other = projects["-home-alice-src-secret-client-acme"]
+    # Named after the repository (last component of the recorded cwd), never
+    # the encoded full path of the directory.
+    other = projects["secret-client-acme"]
     assert other.output_tokens == fake_home.yday_output_tokens
     assert other.cost == pytest.approx(fake_home.yday_cost)
+    assert set(projects) == {"myproj", "secret-client-acme"}
+
+
+def _write_session(path, entries):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+
+def test_projects_with_same_repo_name_are_aggregated(fake_home):
+    """Two checkouts of a repo in different parents show up as one project."""
+    src = fake_home.projects / "-home-alice-workspace-myproj" / "aaaa.jsonl"
+    entries = [json.loads(line) for line in src.read_text().splitlines()]
+    for e in entries:
+        e["cwd"] = "/home/alice/other/myproj"
+        if e["type"] == "assistant":
+            e["message"]["id"] = "other-" + e["message"]["id"]
+    _write_session(fake_home.projects / "-home-alice-other-myproj" / "bbbb.jsonl", entries)
+
+    projects = {p.name: p for p in parser.parse_projects()}
+    assert projects["myproj"].session_count == 2
+    assert projects["myproj"].output_tokens == 2 * fake_home.today_output_tokens
+    assert projects["myproj"].cost == pytest.approx(2 * fake_home.today_cost)
+
+
+def test_project_name_falls_back_to_directory_heuristic_without_cwd(fake_home):
+    no_cwd = [{"type": "user", "timestamp": "2026-01-01T00:00:00Z",
+               "message": {"role": "user", "content": "hi"}}]
+    _write_session(fake_home.projects / "-Users-bob-workspace-tool-tool" / "s.jsonl", no_cwd)
+    _write_session(fake_home.projects / "-home-bob-src-other" / "s.jsonl", no_cwd)
+    names = {p.name for p in parser.parse_projects()}
+    assert "tool" in names          # "workspace" heuristic, duplicate segment collapsed
+    assert "other" in names         # encoded absolute path: last segment only
+    assert not any(n.startswith("-") for n in names)
+
+
+@pytest.mark.parametrize("cwd,expected", [
+    ("/home/me/src/my-repo", "my-repo"),
+    ("/home/me/src/my-repo/", "my-repo"),
+    ("C:\\Users\\me\\proj", "proj"),
+    ("/", "home"),
+])
+def test_repo_name_from_cwd(cwd, expected):
+    assert parser._repo_name_from_cwd(cwd) == expected
+
+
+def test_repo_name_for_home_directory():
+    assert parser._repo_name_from_cwd(str(parser.Path.home())) == "home"
+
+
+def test_read_session_cwd(fake_home, tmp_path):
+    src = fake_home.projects / "-home-alice-workspace-myproj" / "aaaa.jsonl"
+    assert parser._read_session_cwd(src) == "/home/alice/workspace/myproj"
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("not json\n{}\n")
+    assert parser._read_session_cwd(empty) is None
+    assert parser._read_session_cwd(tmp_path / "missing.jsonl") is None
 
 
 def test_session_tokens_shared_seen_set_across_files(fake_home):

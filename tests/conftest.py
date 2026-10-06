@@ -100,6 +100,13 @@ def fake_home(tmp_path, monkeypatch):
         _asst("m3", 10, 700, 0, 0, ty, {"type": "text", "text": "d"}),
     ]
 
+    # Claude Code stamps every entry with the session's working directory;
+    # the project name is its last component.
+    for entry in session_a:
+        entry["cwd"] = "/home/alice/workspace/myproj"
+    for entry in session_b:
+        entry["cwd"] = "/home/alice/src/secret-client-acme"
+
     dir_a = projects / "-home-alice-workspace-myproj"
     dir_b = projects / "-home-alice-src-secret-client-acme"
     dir_a.mkdir(parents=True)

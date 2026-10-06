@@ -96,7 +96,9 @@ def test_sync_payload_contents(fake_home, monkeypatch):
     assert body["hour_counts"] == {"10": 1}
     assert body["today_hourly_date"] == fake_home.today
     assert sum(h["tokens"] for h in body["today_hourly"]) == fake_home.today_output_tokens
-    assert {p["name"] for p in body["projects"]} == {"myproj", "-home-alice-src-secret-client-acme"}
+    # repository names only, never the full local path
+    assert {p["name"] for p in body["projects"]} == {"myproj", "secret-client-acme"}
+    assert "/home/alice" not in json.dumps(body)
     # never any message content
     assert "content" not in json.dumps(body)
 
