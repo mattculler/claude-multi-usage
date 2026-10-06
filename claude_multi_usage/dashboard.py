@@ -22,14 +22,15 @@ def format_tokens(n: int) -> str:
     return str(n)
 
 
-def make_summary_panel(data: UsageData, local: bool = True) -> Panel:
+def make_summary_panel(data: UsageData, local: bool = True, costs: tuple | None = None) -> Panel:
     """Overall summary stats.
 
     ``local`` means ``data`` describes this machine, so the cost estimate can
     be computed from the local session files.  For data that came from the
     sync server (``cmu diff``) no cost is shown: the server carries no cost
     data, and consulting the local cost cache would attribute this machine's
-    spend to another device.
+    spend to another device. ``costs`` is the result of ``get_costs()`` when
+    the caller already has it.
     """
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column("label", style="dim")
@@ -49,7 +50,8 @@ def make_summary_panel(data: UsageData, local: bool = True) -> Panel:
     if not local:
         table.add_row("Estimated Cost", "[dim]n/a (not synced)[/dim]")
     else:
-        costs = get_costs()
+        if costs is None:
+            costs = get_costs()
         if costs is not None:
             _, total_cost, _ = costs
             table.add_row("Estimated Cost", f"[bold yellow]{format_cost(total_cost)}[/bold yellow]")
@@ -227,9 +229,12 @@ def make_projects_table(data: UsageData, limit: int = 10) -> Panel:
     return Panel(table, title=f"Top Projects (total {len(data.projects)})", border_style="magenta")
 
 
-def make_models_table(data: UsageData, local: bool = True) -> Panel:
-    """Model usage breakdown, with costs from the local cache for local data."""
-    costs = get_costs() if local else None
+def make_models_table(data: UsageData, local: bool = True, costs: tuple | None = None) -> Panel:
+    """Model usage breakdown, with costs for local data."""
+    if local and costs is None:
+        costs = get_costs()
+    if not local:
+        costs = None
     has_costs = costs is not None
 
     model_costs = {}
@@ -278,16 +283,16 @@ def render_dashboard(data: UsageData, days: int = 14,
     console.rule(f"[bold blue]{title}[/bold blue]")
     console.print()
 
+    # Costs are computed once and shared by every panel
+    costs = get_costs() if local else None
+
     # Summary + Models side by side
-    console.print(Columns([make_summary_panel(data, local=local),
-                           make_models_table(data, local=local)], equal=True))
+    console.print(Columns([make_summary_panel(data, local=local, costs=costs),
+                           make_models_table(data, local=local, costs=costs)], equal=True))
     console.print()
 
     # Daily chart (with cost data if available)
-    daily_costs = None
-    if local:
-        costs = get_costs()
-        daily_costs = costs[0] if costs else None
+    daily_costs = costs[0] if costs else None
     console.print(make_daily_chart(data, days=days, date_from=date_from, date_to=date_to, daily_costs=daily_costs))
     console.print()
 

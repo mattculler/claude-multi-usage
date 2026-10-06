@@ -135,14 +135,11 @@ def test_first_and_last_seen_merge_across_naive_and_aware_datetimes(fake_home):
     old = parser.datetime(2025, 6, 1, 12, 0).timestamp()
     os.utime(fb, (old, old))
 
-    for with_tokens in (True, False):
-        p = {p.name: p for p in parser.parse_projects(with_tokens=with_tokens)}["myrepo"]
-        assert p.session_count == 2
-        assert p.first_seen.tzinfo is None and p.first_seen.date() == date(2025, 6, 1)
-        if with_tokens:
-            assert p.last_seen.tzinfo is not None and p.last_seen.date() == date(2026, 1, 10)
-        else:  # no file is read, so both dates come from mtimes
-            assert p.last_seen.tzinfo is None and p.last_seen >= p.first_seen
+    p = {p.name: p for p in parser.parse_projects()}["myrepo"]
+    assert p.session_count == 2
+    assert p.first_seen.date() == date(2025, 6, 1)   # from B's mtime
+    assert p.last_seen.date() == date(2026, 1, 10)   # from A's timestamp
+    assert p.first_seen.tzinfo is not None and p.last_seen.tzinfo is not None
 
 
 @pytest.mark.parametrize("cwd,expected", [
@@ -171,16 +168,16 @@ def test_read_session_cwd(fake_home, tmp_path):
     assert parser._read_session_cwd(tmp_path / "missing.jsonl") is None
 
 
-def test_session_tokens_shared_seen_set_across_files(fake_home):
-    """Resumed sessions copy history into a new file; shared ids stop double counting."""
+def test_resumed_session_copy_is_not_double_counted(fake_home):
+    """Resumed sessions copy history into a new file; shared ids count once."""
     src = fake_home.projects / "-home-alice-workspace-myproj" / "aaaa.jsonl"
-    copy = src.with_name("resumed.jsonl")
-    copy.write_text(src.read_text())
-    seen = set()
-    out1, _, _, _ = parser._parse_session_tokens(src, seen_msg_ids=seen)
-    out2, _, _, _ = parser._parse_session_tokens(copy, seen_msg_ids=seen)
-    assert out1 == fake_home.today_output_tokens
-    assert out2 == 0
+    src.with_name("resumed.jsonl").write_text(src.read_text())
+    projects = {p.name: p for p in parser.parse_projects()}
+    assert projects["myproj"].session_count == 2
+    assert projects["myproj"].output_tokens == fake_home.today_output_tokens
+    assert projects["myproj"].cost == pytest.approx(fake_home.today_cost)
+    hourly = parser.parse_today_hourly()
+    assert sum(h.tokens for h in hourly) == fake_home.today_output_tokens
 
 
 def test_cost_cache_agrees_with_parser(fake_home):
@@ -188,9 +185,9 @@ def test_cost_cache_agrees_with_parser(fake_home):
     assert today_cost == pytest.approx(fake_home.today_cost)
     assert total == pytest.approx(fake_home.today_cost + fake_home.yday_cost)
     assert set(daily) == {fake_home.today, fake_home.yday}
-    # A second call serves past days from the on-disk cache and agrees
     assert cost_cache.get_costs()[1] == pytest.approx(total)
-    assert (fake_home.home / ".claude-multi-usage" / "cost-cache.json").exists()
+    assert cost_cache.day_cost(fake_home.yday) == pytest.approx(fake_home.yday_cost)
+    assert (fake_home.home / ".claude-multi-usage" / "index.db").exists()
 
 
 def test_load_usage_data(fake_home):
@@ -204,10 +201,14 @@ def test_load_usage_data(fake_home):
 
 
 def test_load_usage_data_without_stats_cache(fake_home):
+    """No stats-cache.json (fresh install, cloud container): session-derived data still shows."""
     (fake_home.home / ".claude" / "stats-cache.json").unlink()
     data = parser.load_usage_data()
     assert data.hostname == "test-host"
     assert data.daily_activity == []
+    assert data.model_usage == []
+    assert data.total_sessions == 0
+    assert [p.name for p in data.projects] == ["myproj", "secret-client-acme"]
 
 
 @pytest.mark.parametrize("raw,expected", [

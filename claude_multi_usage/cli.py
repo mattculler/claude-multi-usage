@@ -350,14 +350,10 @@ def today():
         table.add_row("Total Tokens", format_tokens(tokens_data.total_tokens))
 
     # Today's cost
-    from .cost_cache import _parse_sessions_for_date_range
+    from .cost_cache import day_cost
     from .pricing import get_pricing
     if get_pricing() is not None:
-        today_daily = _parse_sessions_for_date_range(today_str, today_str)
-        today_cost = sum(
-            d["cost"] for models in today_daily.values() for d in models.values()
-        )
-        table.add_row("Cost", f"[bold yellow]{format_cost(today_cost)}[/bold yellow]")
+        table.add_row("Cost", f"[bold yellow]{format_cost(day_cost(today_str))}[/bold yellow]")
 
     console.print()
     console.print(Panel(table, title=f"Today - {data.hostname}", border_style="blue"))
@@ -423,13 +419,17 @@ def models():
 
 
 @main.command(context_settings=CONTEXT_SETTINGS)
-def cost():
+@click.option("--rebuild", is_flag=True,
+              help="Discard the session index and re-read every session file "
+                   "(needed after changing the system time zone).")
+def cost(rebuild: bool):
     """Show monthly cost breakdown.
 
     \b
-    Calculates accurate costs by parsing session files with
-    incremental caching. Past days are cached (fixed),
-    today is calculated in realtime.
+    Token counts come from an incremental index of the session files
+    (~/.claude-multi-usage/index.db); only files that changed since the
+    last run are read. Prices are applied when displaying, so a pricing
+    update takes effect immediately.
 
     \b
     Pricing is fetched from LiteLLM's pricing DB and cached locally.
@@ -440,6 +440,10 @@ def cost():
     from rich.panel import Panel
 
     console = Console()
+    if rebuild:
+        from .index import rebuild as rebuild_index
+        rebuild_index()
+        console.print("[dim]Session index discarded; re-reading session files.[/dim]")
     costs = get_costs()
     if costs is None:
         console.print()

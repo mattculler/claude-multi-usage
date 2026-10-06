@@ -30,6 +30,7 @@ cmu projects           # Usage by project (sorted by output tokens)
 cmu projects -n 5      # Top 5 projects only
 cmu models             # Usage by model
 cmu cost               # Monthly cost breakdown
+cmu cost --rebuild     # Re-read all session files (after a time zone change)
 cmu tree               # Grass/tree ASCII art visualization (daily/weekly/monthly/yearly)
 cmu dashboard -d 30    # Last 30 days
 cmu dashboard --from 2026-03-01 --to 2026-03-07   # Date range
@@ -232,9 +233,10 @@ cc() {
 
 Calculates estimated API costs using [LiteLLM's pricing DB](https://github.com/BerriAI/litellm) (2,600+ models). Pricing is auto-fetched and cached locally for 24 hours.
 
+- Prices are applied when displaying, so a pricing update applies to all history immediately
 - Supports tiered pricing (200K+ token extended context)
-- Subagent (haiku) usage included
-- Deduplicates streaming message blocks
+- Subagent usage included
+- Deduplicates streaming message blocks and resumed-session copies
 - Falls back to last cached pricing when offline
 
 ```
@@ -256,6 +258,8 @@ Calculates estimated API costs using [LiteLLM's pricing DB](https://github.com/B
 Reads local Claude Code data from `~/.claude/`:
 - `stats-cache.json` — daily activity, model tokens, hourly counts
 - `projects/**/*.jsonl` — session files per project (including subagents)
+
+Session files are read into an incremental index at `~/.claude-multi-usage/index.db`. A file is read again only when it changes, and only the newly appended bytes when it grows, so commands stay fast as history accumulates; files Claude Code deletes drop out of the index. The index stores token counts, not prices. Local dates are fixed when a file is indexed, so after changing the system time zone run `cmu cost --rebuild`.
 
 No API keys required. Local data stays local unless you opt in to sync; the only other network access is a fetch of model prices from LiteLLM's GitHub repository, cached for 24 hours.
 

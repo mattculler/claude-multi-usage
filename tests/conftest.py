@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_multi_usage import config, cost_cache, parser, pricing
+from claude_multi_usage import config, index, parser, pricing
 
 MODEL = "claude-sonnet-4-5-20250929"
 PRICING = {
@@ -66,9 +66,9 @@ def fake_home(tmp_path, monkeypatch):
     monkeypatch.setattr(parser, "STATS_FILE", claude_dir / "stats-cache.json")
     monkeypatch.setattr(parser, "PROJECTS_DIR", projects)
     monkeypatch.setattr(parser, "get_hostname", lambda: "test-host")
-    monkeypatch.setattr(cost_cache, "CLAUDE_PROJECTS_DIR", projects)
-    monkeypatch.setattr(cost_cache, "CACHE_DIR", cmu_dir)
-    monkeypatch.setattr(cost_cache, "CACHE_FILE", cmu_dir / "cost-cache.json")
+    monkeypatch.setattr(index, "CACHE_DIR", cmu_dir)
+    monkeypatch.setattr(index, "INDEX_FILE", cmu_dir / "index.db")
+    monkeypatch.setattr(index, "_instance", None)
     monkeypatch.setattr(pricing, "CACHE_DIR", cmu_dir)
     monkeypatch.setattr(pricing, "PRICING_CACHE_FILE", cmu_dir / "pricing-cache.json")
     monkeypatch.setattr(pricing, "_pricing_cache", {k: dict(v) for k, v in PRICING.items()})
@@ -128,8 +128,10 @@ def fake_home(tmp_path, monkeypatch):
         "firstSessionDate": yday + "T10:00:00.000Z",
     }))
 
-    return SimpleNamespace(
+    yield SimpleNamespace(
         home=tmp_path, projects=projects, today=today, yday=yday, model=MODEL,
         today_output_tokens=TODAY_OUTPUT_TOKENS, today_cost=TODAY_COST,
         yday_output_tokens=YDAY_OUTPUT_TOKENS, yday_cost=YDAY_COST,
     )
+    if index._instance is not None:
+        index._instance.close()
