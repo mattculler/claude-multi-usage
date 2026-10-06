@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -10,11 +12,15 @@ from claude_multi_usage.server.models import SyncPayload  # noqa: E402
 from claude_multi_usage.server.store import Store  # noqa: E402
 
 
-@pytest.fixture
-def client(tmp_path, monkeypatch):
+def _make_client(tmp_path, monkeypatch):
     monkeypatch.setenv("CMU_DB_PATH", str(tmp_path / "server.db"))
     monkeypatch.setattr(app_module, "_store", None)
-    with TestClient(app_module.app) as c:
+    return TestClient(app_module.app)
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    with _make_client(tmp_path, monkeypatch) as c:
         yield c
 
 
@@ -75,6 +81,46 @@ def test_resync_merges_history_and_keeps_alias(client):
 def test_legacy_email_query_and_payload(client):
     client.post("/api/sync", json=payload("old-box", keys=[], email="me@example.com"))
     assert [d["hostname"] for d in client.get("/api/usage", params={"email": "me@example.com"}).json()] == ["old-box"]
+
+
+def test_oversized_payload_is_rejected_and_not_stored(client):
+    big = payload(projects=[{"name": f"p{i}", "session_count": 1} for i in range(100_000)])
+    assert len(json.dumps(big)) > app_module.DEFAULT_MAX_BODY_BYTES
+    r = client.post("/api/sync", json=big)
+    assert r.status_code == 413
+    assert "byte limit" in r.json()["detail"]
+    assert client.get("/api/usage", params={"hostname": "box-a"}).json() == []
+    # the server keeps working afterwards
+    assert client.post("/api/sync", json=payload()).status_code == 200
+
+
+def test_body_limit_is_configurable(tmp_path, monkeypatch):
+    monkeypatch.setenv("CMU_MAX_BODY_BYTES", "200")
+    with _make_client(tmp_path, monkeypatch) as c:
+        assert c.post("/api/sync", json={"hostname": "tiny", "synced_at": "x"}).status_code == 200
+        assert c.post("/api/sync", json=payload()).status_code == 413
+
+
+def test_chunked_body_without_content_length_is_limited(tmp_path, monkeypatch):
+    monkeypatch.setenv("CMU_MAX_BODY_BYTES", "200")
+    body = json.dumps(payload()).encode()
+    with _make_client(tmp_path, monkeypatch) as c:
+        r = c.post("/api/sync", content=iter([body[:100], body[100:]]),
+                   headers={"Content-Type": "application/json"})
+        assert "content-length" not in {k.lower() for k in r.request.headers}
+        assert r.status_code == 413
+
+
+@pytest.mark.parametrize("raw", ["abc", "0", "-5"])
+def test_invalid_body_limit_is_rejected(monkeypatch, raw):
+    monkeypatch.setenv("CMU_MAX_BODY_BYTES", raw)
+    with pytest.raises(ValueError):
+        app_module.get_max_body_bytes()
+
+
+def test_default_body_limit(monkeypatch):
+    monkeypatch.delenv("CMU_MAX_BODY_BYTES", raising=False)
+    assert app_module.get_max_body_bytes() == app_module.DEFAULT_MAX_BODY_BYTES
 
 
 def test_store_direct_roundtrip(tmp_path):

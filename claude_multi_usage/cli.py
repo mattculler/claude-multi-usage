@@ -891,17 +891,23 @@ def tree():
 @click.option("--port", "-p", default=8000, show_default=True, help="Bind port.")
 @click.option("--db-path", default=None, metavar="PATH",
               help="SQLite database path (default: /data/server.db).")
-def server_cmd(action: str, host: str, port: int, db_path: str):
+@click.option("--max-body-bytes", default=None, type=click.IntRange(min=1), metavar="N",
+              help="Reject sync payloads larger than N bytes (default: 2097152).")
+def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: int):
     """Start the sync collection server.
 
     \b
     Requires server extras: pip install claude-multi-usage[server]
 
     \b
+    The API has no authentication: run it on a private network only.
+
+    \b
     Examples:
       cmu server start
       cmu server start --host 0.0.0.0 --port 8000
       cmu server start --db-path ./data/server.db
+      cmu server start --max-body-bytes 500000
     """
     if action == "start":
         try:
@@ -917,6 +923,8 @@ def server_cmd(action: str, host: str, port: int, db_path: str):
         import os
         if db_path:
             os.environ["CMU_DB_PATH"] = db_path
+        if max_body_bytes:
+            os.environ["CMU_MAX_BODY_BYTES"] = str(max_body_bytes)
 
         uvicorn.run(
             "claude_multi_usage.server.app:app",
