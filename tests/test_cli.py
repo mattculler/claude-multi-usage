@@ -73,8 +73,10 @@ def test_server_start_options(fake_home, monkeypatch):
 
     calls = []
     monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: calls.append((a, k))))
-    monkeypatch.delenv("CMU_MAX_BODY_BYTES", raising=False)
-    monkeypatch.delenv("CMU_DB_PATH", raising=False)
+    # The command writes os.environ directly; setenv (not delenv) makes
+    # monkeypatch restore the original absence of these variables afterwards.
+    monkeypatch.setenv("CMU_MAX_BODY_BYTES", "placeholder")
+    monkeypatch.setenv("CMU_DB_PATH", "placeholder")
 
     assert CliRunner().invoke(cli.main, ["server", "start", "--max-body-bytes", "0"]).exit_code == 2
 

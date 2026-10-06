@@ -96,10 +96,14 @@ def test_oversized_payload_is_rejected_and_not_stored(client):
     assert client.post("/api/sync", json=payload()).status_code == 200
 
 
-def test_chunked_rejection_accumulates_across_asgi_messages(monkeypatch):
+def test_chunked_rejection_accumulates_across_asgi_messages(tmp_path, monkeypatch):
     """Drive the ASGI app directly: the body arrives in several messages."""
     import asyncio
 
+    # The accepted request below reaches the real endpoint, so give it a
+    # scratch database rather than the default /data/server.db.
+    monkeypatch.setenv("CMU_DB_PATH", str(tmp_path / "server.db"))
+    monkeypatch.setattr(app_module, "_store", None)
     monkeypatch.setenv("CMU_MAX_BODY_BYTES", "200")
     chunks = [b"x" * 150, b"x" * 150, b"x" * 146]
 
@@ -135,6 +139,8 @@ def test_chunked_rejection_accumulates_across_asgi_messages(monkeypatch):
     delivered, sent = asyncio.run(run([b'{"hostname":"a",', b'"synced_at":"x"}']))
     assert next(m for m in sent if m["type"] == "http.response.start")["status"] == 200
     assert delivered == [16, 16]
+    assert (tmp_path / "server.db").exists()
+    app_module._store.close()
 
 
 def test_bad_body_limit_fails_at_startup(tmp_path, monkeypatch):
