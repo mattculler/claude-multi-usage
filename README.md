@@ -38,6 +38,10 @@ cmu diff               # All devices (per-device view, via sync server)
 cmu diff --merged      # All devices (merged into one view)
 cmu diff --key my-key  # Filter by specific key
 cmu config show        # Show current configuration
+cmu sync               # Push local usage to the sync server once
+cmu autosync install   # Sync automatically whenever local usage changes
+cmu remote install HOST                # Install cmu + autosync on another machine over ssh
+cmu import-claude-export export.zip    # Import a claude.ai data export (web/desktop/mobile chats)
 ```
 
 `claude-multi-usage` also works as a command alias.
@@ -138,17 +142,48 @@ cmu diff --key my-key  # Filter by specific key
 
 ### Auto Sync
 
-Add to `~/.zshrc` to sync automatically when using Claude:
+Install a per-user scheduled job that checks every few minutes whether the local usage files changed and uploads only then:
+
+```bash
+cmu autosync install            # every 15 minutes
+cmu autosync install --every 5
+cmu autosync status
+cmu autosync uninstall
+```
+
+On Linux this is a systemd user timer (`~/.config/systemd/user/cmu-autosync.timer`); it runs while you are logged in, or always with `cmu autosync install --linger` (`loginctl enable-linger`). On macOS it is a launchd agent in `~/Library/LaunchAgents`, logging to `~/.claude-multi-usage/autosync.log`. The job runs `cmu autosync run`, which compares a fingerprint of `~/.claude` with the one from the last successful sync; an idle machine never contacts the server. `cmu sync --if-changed` does the same check for a shell wrapper such as:
 
 ```bash
 cc() {
-    cmu sync --quiet &>/dev/null &
+    cmu sync --if-changed --quiet &>/dev/null &
     command claude "$@"
-    cmu sync --quiet &>/dev/null &
+    cmu sync --if-changed --quiet &>/dev/null &
 }
 ```
 
-> The function name `cc` is just an example — you can use any name you prefer (e.g., `cl`, `claude-sync`). If you already have `alias cc="claude"` in your shell config, replace it with the function above and remove the alias line to avoid conflicts.
+### Other machines
+
+From a machine that is already configured, install cmu, the server settings and the autosync job on another one over ssh:
+
+```bash
+cmu remote install alice@laptop
+cmu remote install laptop --alias laptop --every 5
+cmu remote install laptop --from git+https://github.com/mattculler/claude-multi-usage.git
+cmu remote uninstall laptop
+```
+
+The remote gets a virtualenv in `~/.local/share/cmu`, a `~/.local/bin/cmu` link, this machine's server URL and keys (override with `--server` and `--key`), and `cmu autosync install`. When run from a source checkout, that checkout is sent over; otherwise the repository URL is installed with pip. The remote needs Python 3.9+ with `venv` (Debian/Ubuntu: `python3-venv`), and must be able to reach PyPI for the dependencies.
+
+### claude.ai chats (web, desktop, Android, iOS)
+
+Chats in the Claude apps are not on any machine you control, and Anthropic offers no usage API for subscribers. The compliant source is the account data export: on claude.ai (web or desktop app; not available in the mobile apps) go to Settings > Privacy > Export data, download the ZIP from the emailed link (valid 24 hours), then:
+
+```bash
+cmu import-claude-export ~/Downloads/data-2026-10-06.zip
+cmu import-claude-export ~/Downloads/data-2026-10-06.zip --dry-run   # inspect without sending
+```
+
+The export is account-wide, so it covers conversations from every client including the phone apps. It is imported as a device named `claude.ai`, visible in `cmu diff`. Message and conversation counts and dates are exact; the export has no token counts or model names, so tokens are estimated from text length (about 4 characters per token) under the model name `claude.ai (estimated)`. Re-importing a newer export replaces the days it covers, so nothing is double counted. The export cannot be automated or scheduled: request it by hand at whatever cadence you like.
 
 ## Dashboard Preview
 

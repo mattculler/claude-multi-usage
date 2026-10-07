@@ -269,6 +269,10 @@ def main(ctx):
       cmu dashboard --from 2026-03-01 --to 2026-03-07    Date range
       cmu diff                   All devices (per-device view)
       cmu diff --merged          All devices (merged view)
+      cmu sync                   Push local usage to the sync server
+      cmu autosync install       Keep the server updated automatically
+      cmu remote install HOST    Set up cmu + autosync on another machine
+      cmu import-claude-export   Import a claude.ai data export
 
     \b
     Data source:
@@ -683,7 +687,9 @@ def config_key_list():
 
 @main.command(context_settings=CONTEXT_SETTINGS)
 @click.option("--quiet", "-q", is_flag=True, help="Suppress output.")
-def sync(quiet: bool):
+@click.option("--if-changed", is_flag=True,
+              help="Only sync when the local usage files changed since the last sync.")
+def sync(quiet: bool, if_changed: bool):
     """Sync local usage data to the central server.
 
     \b
@@ -694,94 +700,263 @@ def sync(quiet: bool):
     Examples:
       cmu sync
       cmu sync --quiet
+      cmu sync --if-changed      Skip the upload if nothing changed locally
     """
-    import json
-    import urllib.request
-    import urllib.error
-    from .config import get_server_url, get_keys, get_alias
+    from . import autosync
+    from .sync_client import SyncError, sync_now
 
     console = Console()
-    server_url = get_server_url()
-
-    if not server_url:
-        if not quiet:
-            console.print("[red]Server URL not configured.[/red]")
-            console.print("Run: cmu config server <url>")
-        raise SystemExit(1)
-
-    keys = get_keys()
-    if not keys:
-        if not quiet:
-            console.print("[red]No keys configured.[/red]")
-            console.print("Run: cmu config key add <your-key>")
-        raise SystemExit(1)
-
-    data = load_usage_data()
-    key_values = [k["key"] for k in keys]
-
-    from .parser import parse_today_hourly
-    today_hourly = parse_today_hourly()
-
-    payload = {
-        "hostname": data.hostname,
-        "alias": get_alias(),
-        "keys": key_values,
-        "synced_at": datetime.now().isoformat(),
-        # Cumulative figures from stats-cache.json. They are a few hundred
-        # bytes and the diff view's Summary / Model Usage panels need them.
-        "total_sessions": data.total_sessions,
-        "total_messages": data.total_messages,
-        "first_session_date": data.first_session_date,
-        "model_usage": [
-            {"model": m.model, "input_tokens": m.input_tokens,
-             "output_tokens": m.output_tokens, "cache_read_tokens": m.cache_read_tokens,
-             "cache_creation_tokens": m.cache_creation_tokens}
-            for m in data.model_usage
-        ],
-        "hour_counts": {str(k): v for k, v in data.hour_counts.items()},
-        # Which day today_hourly describes, so stale data is labelled correctly
-        "today_hourly_date": datetime.now().strftime("%Y-%m-%d"),
-        "today_hourly": [
-            {"hour": h.hour, "message_count": h.message_count,
-             "session_count": h.session_count, "tokens": h.tokens}
-            for h in today_hourly
-        ],
-        "daily_activity": [
-            {"date": a.date, "message_count": a.message_count,
-             "session_count": a.session_count, "tool_call_count": a.tool_call_count}
-            for a in data.daily_activity
-        ],
-        "daily_model_tokens": [
-            {"date": t.date, "tokens_by_model": t.tokens_by_model}
-            for t in data.daily_model_tokens
-        ],
-        "projects": [
-            {"name": p.name, "session_count": p.session_count,
-             "output_tokens": p.output_tokens, "input_tokens": p.input_tokens,
-             "first_seen": p.first_seen.isoformat() if p.first_seen else None,
-             "last_seen": p.last_seen.isoformat() if p.last_seen else None}
-            for p in data.projects
-        ],
-    }
-
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        f"{server_url}/api/sync",
-        data=body,
-        headers={"Content-Type": "application/json", "User-Agent": "cmu"},
-        method="POST",
-    )
-
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            json.loads(resp.read())
+        if if_changed:
+            result = autosync.run(sync_now)
             if not quiet:
-                keys_str = ", ".join(key_values)
-                console.print(f"[green]Synced to {server_url}[/green] ({data.hostname}, keys: {keys_str})")
-    except urllib.error.URLError as e:
+                console.print("[dim]Nothing changed since the last sync.[/dim]" if result == "unchanged"
+                              else "[green]Synced.[/green]")
+            return
+        payload = sync_now()
+    except SyncError as e:
         if not quiet:
-            console.print(f"[red]Sync failed:[/red] {e}")
+            console.print(f"[red]{e}[/red]")
         raise SystemExit(1)
+    if not quiet:
+        from .config import get_server_url
+        console.print(f"[green]Synced to {get_server_url()}[/green] "
+                      f"({payload['hostname']}, keys: {', '.join(payload['keys'])})")
+
+
+@main.command("import-claude-export", context_settings=CONTEXT_SETTINGS)
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--alias", default=None, help="Display alias for the claude.ai pseudo-device.")
+@click.option("--dry-run", is_flag=True, help="Show what would be sent without contacting the server.")
+def import_claude_export(path: str, alias: str, dry_run: bool):
+    """Import a claude.ai data export as the device "claude.ai".
+
+    \b
+    Request the export on claude.ai (Settings > Privacy > Export data,
+    web or desktop app only), download the ZIP from the emailed link, then:
+      cmu import-claude-export ~/Downloads/data-2026-10-06.zip
+
+    \b
+    The export covers every client of the account (web, desktop, Android,
+    iOS). Message counts and dates are exact; tokens are estimated from
+    text length (about 4 characters per token) under the model name
+    "claude.ai (estimated)". Re-importing a newer export replaces the
+    days it covers; nothing is double counted.
+    """
+    from rich.panel import Panel
+    from rich.table import Table
+    from .claude_export import EXPORT_HOSTNAME, ExportError, describe, load_export, summarize_export
+    from .sync_client import SyncError, post_payload, require_server_config
+
+    console = Console()
+    try:
+        export = load_export(path)
+    except ExportError as e:
+        console.print(f"[red]{e}[/red]")
+        raise SystemExit(1)
+
+    server_url, key_values = None, []
+    if not dry_run:
+        try:
+            server_url, key_entries = require_server_config()
+        except SyncError as e:
+            console.print(f"[red]{e}[/red]")
+            raise SystemExit(1)
+        key_values = [k["key"] for k in key_entries]
+
+    payload = summarize_export(export, key_values, alias=alias)
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column("label", style="dim")
+    table.add_column("value", style="bold cyan")
+    for label, value in describe(payload):
+        table.add_row(label, value)
+    console.print()
+    console.print(Panel(table, title=f"claude.ai export: {path}", border_style="blue"))
+    if dry_run:
+        console.print("[dim]Dry run: nothing sent.[/dim]")
+        console.print()
+        return
+    try:
+        post_payload(server_url, payload)
+    except SyncError as e:
+        console.print(f"[red]{e}[/red]")
+        raise SystemExit(1)
+    console.print(f"[green]Imported to {server_url}[/green] as device '{EXPORT_HOSTNAME}' "
+                  f"(keys: {', '.join(key_values)})")
+    console.print()
+
+
+@main.group("autosync", context_settings=CONTEXT_SETTINGS)
+def autosync_group():
+    """Keep the server updated automatically.
+
+    \b
+    Installs a per-user scheduler job (a systemd user timer on Linux, a
+    launchd agent on macOS) that runs `cmu autosync run` periodically.
+    That uploads only when the local usage files changed since the last
+    successful sync, so an idle machine never contacts the server.
+
+    \b
+    Examples:
+      cmu autosync install            Every 15 minutes
+      cmu autosync install --every 5
+      cmu autosync status
+      cmu autosync run                Sync now if anything changed
+      cmu autosync uninstall
+    """
+
+
+@autosync_group.command("install")
+@click.option("--every", default=15, type=click.IntRange(min=1), show_default=True, metavar="MINUTES",
+              help="How often to check for changes.")
+@click.option("--linger", is_flag=True,
+              help="Linux: also run while you are logged out (loginctl enable-linger).")
+def autosync_install(every: int, linger: bool):
+    """Install and start the periodic sync job for this user."""
+    import subprocess
+    from . import autosync
+    from .sync_client import SyncError, require_server_config, sync_now
+
+    console = Console()
+    try:
+        require_server_config()
+        lines = autosync.install(every, linger)
+    except (SyncError, RuntimeError, ValueError) as e:
+        console.print(f"[red]{e}[/red]")
+        raise SystemExit(1)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]{' '.join(e.cmd)} failed:[/red] {(e.stderr or e.stdout or '').strip()}")
+        raise SystemExit(1)
+    for line in lines:
+        console.print(line)
+    try:
+        result = autosync.run(sync_now, force=True)
+        console.print(f"[green]First sync: {result}[/green]")
+    except SyncError as e:
+        console.print(f"[yellow]First sync failed:[/yellow] {e}")
+        console.print("[dim]The job stays installed and will retry on schedule.[/dim]")
+
+
+@autosync_group.command("uninstall")
+def autosync_uninstall():
+    """Remove the periodic sync job."""
+    from . import autosync
+
+    for line in autosync.uninstall():
+        Console().print(line)
+
+
+@autosync_group.command("status")
+def autosync_status():
+    """Show whether the job is installed and when it last synced."""
+    from . import autosync
+
+    for line in autosync.describe_status(autosync.status()):
+        Console().print(line)
+
+
+@autosync_group.command("run")
+@click.option("--force", is_flag=True, help="Sync even if nothing changed.")
+@click.option("--quiet", "-q", is_flag=True, help="Only print when something was synced.")
+def autosync_run(force: bool, quiet: bool):
+    """Sync now if the local usage files changed (what the scheduler runs)."""
+    from . import autosync
+    from .sync_client import SyncError, sync_now
+
+    console = Console()
+    try:
+        result = autosync.run(sync_now, force=force)
+    except SyncError as e:
+        console.print(f"[red]{e}[/red]")
+        raise SystemExit(1)
+    if result == "synced":
+        console.print(f"[green]Synced at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/green]")
+    elif not quiet:
+        console.print("[dim]Nothing changed since the last sync.[/dim]")
+
+
+@main.group("remote", context_settings=CONTEXT_SETTINGS)
+def remote_group():
+    """Install cmu on other machines over SSH.
+
+    \b
+    Examples:
+      cmu remote install alice@laptop                    Install, configure, schedule
+      cmu remote install laptop --alias laptop --every 5
+      cmu remote install laptop --from git+https://github.com/you/claude-multi-usage.git
+      cmu remote uninstall laptop
+
+    \b
+    The remote gets a virtualenv in ~/.local/share/cmu, a ~/.local/bin/cmu
+    link, this machine's server URL and keys, and `cmu autosync install`.
+    Needs Python 3.9+ with venv there (Debian/Ubuntu: python3-venv).
+    """
+
+
+@remote_group.command("install")
+@click.argument("host")
+@click.option("--every", default=15, type=click.IntRange(min=1), show_default=True, metavar="MINUTES",
+              help="Autosync interval on the remote host.")
+@click.option("--server", "server_url", default=None, metavar="URL",
+              help="Sync server URL (default: this machine's).")
+@click.option("--key", "key_values", multiple=True, metavar="KEY",
+              help="Sync key, repeatable (default: this machine's keys).")
+@click.option("--alias", default=None, help="Display alias for the remote machine.")
+@click.option("--from", "source", default=None, metavar="PATH|REQUIREMENT",
+              help="Install cmu from a source checkout (sent over ssh) or a pip requirement such as "
+                   "git+https://... (default: this checkout when run from one, else the repository URL).")
+@click.option("--python", default="python3", show_default=True, help="Python interpreter on the remote host.")
+@click.option("--ssh-option", "ssh_options", multiple=True, metavar="OPT",
+              help='Extra ssh option, repeatable, e.g. "-o StrictHostKeyChecking=accept-new".')
+def remote_install(host: str, every: int, server_url: str, key_values: tuple, alias: str,
+                   source: str, python: str, ssh_options: tuple):
+    """Install cmu and its autosync job on HOST (an ssh destination)."""
+    import shlex
+    import subprocess
+    from . import remote
+    from .config import get_keys, get_server_url
+
+    console = Console()
+    server_url = server_url or get_server_url()
+    if not server_url:
+        console.print("[red]No server URL: pass --server or run `cmu config server <url>` here first.[/red]")
+        raise SystemExit(1)
+    keys = [(k, "") for k in key_values] or [(k["key"], k.get("description", "")) for k in get_keys()]
+    if not keys:
+        console.print("[red]No keys: pass --key or run `cmu config key add <key>` here first.[/red]")
+        raise SystemExit(1)
+    opts = [o for group in ssh_options for o in shlex.split(group)]
+    try:
+        lines = remote.install(host, server_url, keys, every, alias=alias, source=source,
+                               python=python, ssh_options=opts)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]ssh to {host} failed (exit {e.returncode}).[/red]")
+        raise SystemExit(1)
+    except (RuntimeError, OSError) as e:
+        console.print(f"[red]{e}[/red]")
+        raise SystemExit(1)
+    for line in lines:
+        console.print(f"[green]{line}[/green]")
+
+
+@remote_group.command("uninstall")
+@click.argument("host")
+@click.option("--ssh-option", "ssh_options", multiple=True, metavar="OPT", help="Extra ssh option, repeatable.")
+def remote_uninstall(host: str, ssh_options: tuple):
+    """Remove cmu and its autosync job from HOST."""
+    import shlex
+    import subprocess
+    from . import remote
+
+    console = Console()
+    opts = [o for group in ssh_options for o in shlex.split(group)]
+    try:
+        lines = remote.uninstall(host, ssh_options=opts)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]ssh to {host} failed (exit {e.returncode}).[/red]")
+        raise SystemExit(1)
+    for line in lines:
+        console.print(f"[green]{line}[/green]")
 
 
 @main.command(context_settings=CONTEXT_SETTINGS)
