@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_multi_usage import config, cost_cache, parser, pricing
+from claude_multi_usage import cli, config, cost_cache, dashboard, index, parser, pricing, tree
 
 MODEL = "claude-sonnet-4-5-20250929"
 PRICING = {
@@ -66,9 +66,9 @@ def fake_home(tmp_path, monkeypatch):
     monkeypatch.setattr(parser, "STATS_FILE", claude_dir / "stats-cache.json")
     monkeypatch.setattr(parser, "PROJECTS_DIR", projects)
     monkeypatch.setattr(parser, "get_hostname", lambda: "test-host")
-    monkeypatch.setattr(cost_cache, "CLAUDE_PROJECTS_DIR", projects)
-    monkeypatch.setattr(cost_cache, "CACHE_DIR", cmu_dir)
-    monkeypatch.setattr(cost_cache, "CACHE_FILE", cmu_dir / "cost-cache.json")
+    monkeypatch.setattr(index, "CACHE_DIR", cmu_dir)
+    monkeypatch.setattr(index, "INDEX_FILE", cmu_dir / "index.db")
+    monkeypatch.setattr(index, "_instance", None)
     monkeypatch.setattr(pricing, "CACHE_DIR", cmu_dir)
     monkeypatch.setattr(pricing, "PRICING_CACHE_FILE", cmu_dir / "pricing-cache.json")
     monkeypatch.setattr(pricing, "_pricing_cache", {k: dict(v) for k, v in PRICING.items()})
@@ -78,7 +78,19 @@ def fake_home(tmp_path, monkeypatch):
     # Rich reads COLUMNS when stdout is not a terminal; keep table cells unwrapped.
     monkeypatch.setenv("COLUMNS", "140")
 
-    now_local = datetime.now().astimezone()
+    # Freeze "now" for every module that asks, so a run that straddles local
+    # midnight sees the same "today" as the fixture's timestamps.
+    frozen = datetime.now()
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen.astimezone(tz) if tz is not None else frozen
+
+    for mod in (parser, cost_cache, cli, dashboard, tree, index):
+        monkeypatch.setattr(mod, "datetime", FrozenDatetime)
+
+    now_local = frozen.astimezone()
     today = now_local.strftime("%Y-%m-%d")
     yday_noon = (now_local - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
     yday = yday_noon.strftime("%Y-%m-%d")
@@ -99,6 +111,13 @@ def fake_home(tmp_path, monkeypatch):
         {"type": "user", "timestamp": ty, "message": {"role": "user", "content": "hi"}},
         _asst("m3", 10, 700, 0, 0, ty, {"type": "text", "text": "d"}),
     ]
+
+    # Claude Code stamps every entry with the session's working directory;
+    # the project name is its last component.
+    for entry in session_a:
+        entry["cwd"] = "/home/alice/workspace/myproj"
+    for entry in session_b:
+        entry["cwd"] = "/home/alice/src/secret-client-acme"
 
     dir_a = projects / "-home-alice-workspace-myproj"
     dir_b = projects / "-home-alice-src-secret-client-acme"
@@ -121,8 +140,10 @@ def fake_home(tmp_path, monkeypatch):
         "firstSessionDate": yday + "T10:00:00.000Z",
     }))
 
-    return SimpleNamespace(
+    yield SimpleNamespace(
         home=tmp_path, projects=projects, today=today, yday=yday, model=MODEL,
         today_output_tokens=TODAY_OUTPUT_TOKENS, today_cost=TODAY_COST,
         yday_output_tokens=YDAY_OUTPUT_TOKENS, yday_cost=YDAY_COST,
     )
+    if index._instance is not None:
+        index._instance.close()

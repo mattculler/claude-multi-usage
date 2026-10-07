@@ -66,6 +66,28 @@ def test_config_roundtrip(fake_home):
     assert config.get_keys() == []
 
 
+def test_server_start_options(fake_home, monkeypatch):
+    import os
+    import sys
+    import types
+
+    calls = []
+    monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: calls.append((a, k))))
+    # The command writes os.environ directly; setenv (not delenv) makes
+    # monkeypatch restore the original absence of these variables afterwards.
+    monkeypatch.setenv("CMU_MAX_BODY_BYTES", "placeholder")
+    monkeypatch.setenv("CMU_DB_PATH", "placeholder")
+
+    assert CliRunner().invoke(cli.main, ["server", "start", "--max-body-bytes", "0"]).exit_code == 2
+
+    result = CliRunner().invoke(cli.main, ["server", "start", "--host", "10.0.0.5", "--port", "9000",
+                                           "--db-path", "x.db", "--max-body-bytes", "500"])
+    assert result.exit_code == 0, result.output
+    assert os.environ["CMU_MAX_BODY_BYTES"] == "500"
+    assert os.environ["CMU_DB_PATH"] == "x.db"
+    assert calls == [(("claude_multi_usage.server.app:app",), {"host": "10.0.0.5", "port": 9000})]
+
+
 def test_sync_without_config_fails_cleanly(fake_home):
     result = CliRunner().invoke(cli.main, ["sync"])
     assert result.exit_code == 1
@@ -96,7 +118,9 @@ def test_sync_payload_contents(fake_home, monkeypatch):
     assert body["hour_counts"] == {"10": 1}
     assert body["today_hourly_date"] == fake_home.today
     assert sum(h["tokens"] for h in body["today_hourly"]) == fake_home.today_output_tokens
-    assert {p["name"] for p in body["projects"]} == {"myproj", "-home-alice-src-secret-client-acme"}
+    # repository names only, never the full local path
+    assert {p["name"] for p in body["projects"]} == {"myproj", "secret-client-acme"}
+    assert "/home/alice" not in json.dumps(body)
     # never any message content
     assert "content" not in json.dumps(body)
 

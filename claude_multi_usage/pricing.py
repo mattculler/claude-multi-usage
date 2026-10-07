@@ -167,29 +167,50 @@ def _tiered_cost(tokens: int, base_price: float,
     return tokens * base_price
 
 
+def is_claude_model(model: str | None) -> bool:
+    """Only Claude models are priced; synthetic or unknown entries are not."""
+    return bool(model) and "claude" in model
+
+
 def calculate_model_cost(
     model: str,
     input_tokens: int,
     output_tokens: int,
     cache_read_tokens: int,
     cache_creation_tokens: int,
+    tiered: bool = True,
 ) -> float:
-    """Calculate cost in USD for a model's token usage."""
+    """Calculate cost in USD for one message's token usage.
+
+    Tiered (above-200K) prices apply per message, so ``tiered=False`` must be
+    used when pricing a sum of several messages that are each below the
+    threshold: their cost is linear and summing first is then exact.
+    """
+    if not is_claude_model(model):
+        return 0.0
     info = _match_model(model)
     if info is None:
         return 0.0
 
+    def tier(key: str):
+        return info.get(key) if tiered else None
+
     cost = (
-        _tiered_cost(input_tokens, info.get("input", 0),
-                     info.get("input_above_200k"))
-        + _tiered_cost(output_tokens, info.get("output", 0),
-                       info.get("output_above_200k"))
-        + _tiered_cost(cache_read_tokens, info.get("cache_read", 0),
-                       info.get("cache_read_above_200k"))
+        _tiered_cost(input_tokens, info.get("input", 0), tier("input_above_200k"))
+        + _tiered_cost(output_tokens, info.get("output", 0), tier("output_above_200k"))
+        + _tiered_cost(cache_read_tokens, info.get("cache_read", 0), tier("cache_read_above_200k"))
         + _tiered_cost(cache_creation_tokens, info.get("cache_creation", 0),
-                       info.get("cache_creation_above_200k"))
+                       tier("cache_creation_above_200k"))
     )
     return cost
+
+
+def usage_cost(row) -> float:
+    """Cost of an index usage row: tiered for a single large message, linear for a sum."""
+    return calculate_model_cost(
+        row["model"], row["input"], row["output"], row["cache_read"], row["cache_create"],
+        tiered=bool(row["big"]),
+    )
 
 
 def format_cost(usd: float) -> str:

@@ -6,15 +6,18 @@ Parses local `~/.claude` data and displays usage stats in your terminal — sess
 
 ## Install
 
-**Homebrew (macOS)**
-```bash
-brew tap hunknownn/tap
-brew install claude-multi-usage
-```
+This fork is installed from the repository. The upstream package on PyPI and Homebrew (`pipx install claude-multi-usage`, `brew install hunknownn/tap/claude-multi-usage`) is upstream's release line and does not contain this fork's fixes (token deduplication, repository-name projects, the server's size limit).
 
 **pipx**
 ```bash
-pipx install claude-multi-usage
+pipx install "git+https://github.com/mattculler/claude-multi-usage.git"
+```
+
+**pip, from a checkout**
+```bash
+git clone https://github.com/mattculler/claude-multi-usage.git
+cd claude-multi-usage
+pip install .            # or: pip install ".[server]" to include the sync server
 ```
 
 ## Usage
@@ -27,6 +30,7 @@ cmu projects           # Usage by project (sorted by output tokens)
 cmu projects -n 5      # Top 5 projects only
 cmu models             # Usage by model
 cmu cost               # Monthly cost breakdown
+cmu cost --rebuild     # Re-read the session files on disk (after a time zone change)
 cmu tree               # Grass/tree ASCII art visualization (daily/weekly/monthly/yearly)
 cmu dashboard -d 30    # Last 30 days
 cmu dashboard --from 2026-03-01 --to 2026-03-07   # Date range
@@ -42,33 +46,74 @@ cmu config show        # Show current configuration
 
 Collect usage data from multiple machines into a central server.
 
+> **Warning: the server has no authentication.** Anyone who can reach its port can read every device's data, overwrite any device's data, or add themselves to any key group. Run it only on a private network (LAN, VPN, Tailscale) and never expose it to the Internet. Keys group devices for display; they are labels, not credentials.
+
+### What gets synced
+
+`cmu sync` sends: hostname, alias, your keys, the sync time, cumulative session and message totals and the first-session date, per-day message/session/tool-call counts, per-day and cumulative token counts by model, an hourly session histogram, today's per-hour tokens/messages/sessions, and a project list. Projects are identified by repository name (the last component of the working directory Claude Code ran in; a Claude Code worktree counts as its repository), with session counts, token totals and first/last-seen dates. It never sends prompts, responses, file contents, full paths, or API keys.
+
+For very old session logs that recorded no working directory, the name is guessed from Claude Code's directory name instead and may be truncated (for example `my-repo` becomes `repo`). Servers that received syncs from clients older than this fork keep the full-path names those clients sent until the server is restarted or the device syncs again; both drop them.
+
 ### Server Setup
 
-Choose one of the following:
+**Run directly on a VM (systemd)**
 
-**Docker (recommended)**
+On a Linux host with systemd and Python 3.9+ (on Debian/Ubuntu also `apt install python3-venv`), from a checkout of this repository:
+
 ```bash
-docker run -d -p 8000:8000 -v cmu-data:/data ghcr.io/hunknownn/claude-multi-usage:latest
+git clone https://github.com/mattculler/claude-multi-usage.git
+cd claude-multi-usage
+sudo deploy/systemd/install.sh
 ```
 
-**Kubernetes**
+The script creates a `cmu` system user, installs the package into `/opt/cmu/venv`, keeps the database in `/var/lib/cmu/server.db`, and enables `cmu-server.service` on port 8000, then waits for `/api/health` to answer. Settings (bind address, port, database path, request size limit) live in `/etc/default/cmu-server`; restart the service after editing. A different database directory must exist and be writable by the `cmu` user. To upgrade, `git pull` and re-run the script. To remove it, `sudo deploy/systemd/install.sh --uninstall`.
+
+```bash
+systemctl status cmu-server
+journalctl -u cmu-server -f
+curl http://localhost:8000/api/health
+```
+
+**Other ways to run it**
+
+<details>
+<summary>Docker</summary>
+
+Build the image from this checkout; the published `ghcr.io/hunknownn/claude-multi-usage` image is upstream's build and lacks this fork's changes.
+
+```bash
+docker build -t cmu-server .
+docker run -d --name cmu-server -p 127.0.0.1:8000:8000 -v cmu-data:/data cmu-server
+```
+
+Replace `127.0.0.1` with the LAN address clients should use. Do not publish the port on a public interface.
+</details>
+
+<details>
+<summary>Kubernetes</summary>
+
+`deploy/k8s/` has a Kustomize base (Deployment, ClusterIP Service, 1 GiB PVC). Its `kustomization.yaml` pins upstream's `ghcr.io/hunknownn/claude-multi-usage` image; to run this fork's code, build and push your own image and point the `images:` entry at it, then:
+
 ```bash
 kubectl create namespace cmu-server
-kubectl apply -k https://github.com/hunknownn/claude-multi-usage/deploy/k8s/ -n cmu-server
+kubectl apply -k deploy/k8s/ -n cmu-server
 ```
 
-To expose via Ingress (optional):
+The Service is `ClusterIP`, reachable inside the cluster only. `deploy/k8s/ingress.example.yaml` shows how to expose it through an Ingress; only do that behind an authenticating ingress or on a private network.
+</details>
+
+<details>
+<summary>pip, in the foreground</summary>
+
+From a checkout of this repository:
+
 ```bash
-curl -O https://raw.githubusercontent.com/hunknownn/claude-multi-usage/main/deploy/k8s/ingress.example.yaml
-# Edit the file — replace your-domain.example.com with your domain
-kubectl apply -f ingress.example.yaml -n cmu-server
+pip install ".[server]"
+cmu server start --host 0.0.0.0 --port 8000 --db-path ./server.db
 ```
 
-**pip**
-```bash
-pip install claude-multi-usage[server]
-cmu server start --host 0.0.0.0 --port 8000
-```
+Options: `--host`, `--port`, `--db-path PATH` (default `/data/server.db`), `--max-body-bytes N` (reject sync payloads larger than N bytes; default 2 MB). The same settings can be given as `CMU_DB_PATH` and `CMU_MAX_BODY_BYTES` environment variables.
+</details>
 
 ### Client Setup
 
@@ -89,7 +134,7 @@ cmu diff --merged      # Merged into one view
 cmu diff --key my-key  # Filter by specific key
 ```
 
-> Keys are used to group devices. Only devices with the same key can see each other's data. Local commands (`cmu dashboard`, `cmu today`, `cmu cost`, etc.) work without keys.
+> Keys group devices for the `cmu diff` view. They are not access control: the server returns every device's data to anyone who asks (see the warning above). Local commands (`cmu dashboard`, `cmu today`, `cmu cost`, etc.) work without keys or a server.
 
 ### Auto Sync
 
@@ -188,9 +233,10 @@ cc() {
 
 Calculates estimated API costs using [LiteLLM's pricing DB](https://github.com/BerriAI/litellm) (2,600+ models). Pricing is auto-fetched and cached locally for 24 hours.
 
+- Prices are applied when displaying, so a pricing update applies to all history immediately
 - Supports tiered pricing (200K+ token extended context)
-- Subagent (haiku) usage included
-- Deduplicates streaming message blocks
+- Subagent usage included
+- Deduplicates streaming message blocks and resumed-session copies
 - Falls back to last cached pricing when offline
 
 ```
@@ -213,7 +259,11 @@ Reads local Claude Code data from `~/.claude/`:
 - `stats-cache.json` — daily activity, model tokens, hourly counts
 - `projects/**/*.jsonl` — session files per project (including subagents)
 
-No API keys required. Local data stays local unless you opt in to sync.
+Session files are read into an incremental index at `~/.claude-multi-usage/index.db`. A file is read again only when it changes, and only the newly appended bytes when it grew in place, so commands stay fast as history accumulates. Transcripts that Claude Code deletes after its retention period stay in the index as history, so `cmu cost` keeps showing past months. The index stores token counts, not prices. Local dates are fixed when a file is indexed, so after changing the system time zone run `cmu cost --rebuild` (it re-reads the files still on disk; already-deleted transcripts keep their old dates). If the index cannot be written (read-only home directory) the session files are read directly for that run.
+
+Upgrading from a version that kept `~/.claude-multi-usage/cost-cache.json`: that file is no longer read and can be deleted. Days whose transcripts Claude Code had already deleted before the first run of this version are not carried over.
+
+No API keys required. Local data stays local unless you opt in to sync; the only other network access is a fetch of model prices from LiteLLM's GitHub repository, cached for 24 hours.
 
 ## Roadmap
 

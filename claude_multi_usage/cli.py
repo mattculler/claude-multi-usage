@@ -309,8 +309,9 @@ def today():
     """Show today's usage in realtime.
 
     \b
-    Parses session .jsonl files directly, so it works even
-    before stats-cache.json is updated by Claude Code.
+    Uses the session index (see `cmu cost --help`), which picks up
+    new session lines on every run, so it works even before
+    stats-cache.json is updated by Claude Code.
 
     \b
     Shows: sessions, messages, tool calls, tokens by model.
@@ -350,14 +351,10 @@ def today():
         table.add_row("Total Tokens", format_tokens(tokens_data.total_tokens))
 
     # Today's cost
-    from .cost_cache import _parse_sessions_for_date_range
+    from .cost_cache import day_cost
     from .pricing import get_pricing
     if get_pricing() is not None:
-        today_daily = _parse_sessions_for_date_range(today_str, today_str)
-        today_cost = sum(
-            d["cost"] for models in today_daily.values() for d in models.values()
-        )
-        table.add_row("Cost", f"[bold yellow]{format_cost(today_cost)}[/bold yellow]")
+        table.add_row("Cost", f"[bold yellow]{format_cost(day_cost(today_str))}[/bold yellow]")
 
     console.print()
     console.print(Panel(table, title=f"Today - {data.hostname}", border_style="blue"))
@@ -369,8 +366,8 @@ def hourly():
     """Show today's usage broken down by hour.
 
     \b
-    Parses session .jsonl files to show per-hour token usage,
-    message counts, and session counts for today.
+    Shows per-hour token usage, message counts, and session counts
+    for today from the session index (see `cmu cost --help`).
 
     \b
     Shows: 24-hour bar chart with tokens, messages, sessions per hour.
@@ -397,8 +394,9 @@ def projects(limit: int):
     """Show project usage breakdown sorted by output tokens.
 
     \b
-    Parses all session .jsonl files to calculate per-project
-    token usage. Shows sessions, output tokens, and last used date.
+    Per-repository token usage from the session index (see
+    `cmu cost --help`). Shows sessions, output tokens, cost, and
+    last used date.
     """
     console = Console()
     data = load_usage_data()
@@ -423,13 +421,19 @@ def models():
 
 
 @main.command(context_settings=CONTEXT_SETTINGS)
-def cost():
+@click.option("--rebuild", is_flag=True,
+              help="Re-read every session file on disk (needed after changing the "
+                   "system time zone). History of transcripts Claude Code has since "
+                   "deleted is kept.")
+def cost(rebuild: bool):
     """Show monthly cost breakdown.
 
     \b
-    Calculates accurate costs by parsing session files with
-    incremental caching. Past days are cached (fixed),
-    today is calculated in realtime.
+    Token counts come from an incremental index of the session files
+    (~/.claude-multi-usage/index.db): only files that changed since the
+    last run are read, and transcripts Claude Code deletes stay in the
+    index as history. Prices are applied when displaying, so a pricing
+    update takes effect immediately.
 
     \b
     Pricing is fetched from LiteLLM's pricing DB and cached locally.
@@ -440,6 +444,10 @@ def cost():
     from rich.panel import Panel
 
     console = Console()
+    if rebuild:
+        from .index import rebuild as rebuild_index
+        stats = rebuild_index()
+        console.print(f"[dim]Session index rebuilt: {stats.file_count(include_gone=False)} files re-read.[/dim]")
     costs = get_costs()
     if costs is None:
         console.print()
@@ -891,17 +899,23 @@ def tree():
 @click.option("--port", "-p", default=8000, show_default=True, help="Bind port.")
 @click.option("--db-path", default=None, metavar="PATH",
               help="SQLite database path (default: /data/server.db).")
-def server_cmd(action: str, host: str, port: int, db_path: str):
+@click.option("--max-body-bytes", default=None, type=click.IntRange(min=1), metavar="N",
+              help="Reject sync payloads larger than N bytes (default: 2097152).")
+def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: int):
     """Start the sync collection server.
 
     \b
     Requires server extras: pip install claude-multi-usage[server]
 
     \b
+    The API has no authentication: run it on a private network only.
+
+    \b
     Examples:
       cmu server start
       cmu server start --host 0.0.0.0 --port 8000
       cmu server start --db-path ./data/server.db
+      cmu server start --max-body-bytes 500000
     """
     if action == "start":
         try:
@@ -917,6 +931,8 @@ def server_cmd(action: str, host: str, port: int, db_path: str):
         import os
         if db_path:
             os.environ["CMU_DB_PATH"] = db_path
+        if max_body_bytes:
+            os.environ["CMU_MAX_BODY_BYTES"] = str(max_body_bytes)
 
         uvicorn.run(
             "claude_multi_usage.server.app:app",

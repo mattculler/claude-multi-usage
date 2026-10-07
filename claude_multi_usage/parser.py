@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import socket
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -127,39 +128,12 @@ def _deduplicate_project_name(name: str) -> str:
     return name
 
 
-def _is_duplicate_message(message: dict, seen_msg_ids: set) -> bool:
-    """Return True if this assistant message was already counted.
+def _read_session_cwd(session_file: Path) -> str | None:
+    """Return the working directory recorded in a session file, if any.
 
-    Claude Code writes one JSONL line per content block of an assistant
-    message (text, tool_use, ...), and every line repeats the same
-    ``message.id`` and ``usage``.  Token counts and costs must therefore be
-    accumulated only once per message id.  Messages without an id (e.g.
-    synthetic ones) are never treated as duplicates.
+    Claude Code stamps nearly every entry with the session's ``cwd``, and the
+    first such entry is within the first few lines, so this stops early.
     """
-    msg_id = message.get("id") if isinstance(message, dict) else None
-    if not msg_id:
-        return False
-    if msg_id in seen_msg_ids:
-        return True
-    seen_msg_ids.add(msg_id)
-    return False
-
-
-def _parse_session_tokens(session_file: Path, calc_cost: bool = False,
-                          seen_msg_ids: set | None = None) -> tuple:
-    """Parse a session jsonl file and return (output_tokens, input_tokens, timestamps, cost).
-
-    ``seen_msg_ids`` may be shared across files so that resumed or forked
-    sessions, which copy earlier history into a new file, are not counted twice.
-    """
-    from .pricing import calculate_model_cost
-
-    if seen_msg_ids is None:
-        seen_msg_ids = set()
-    output_tokens = 0
-    input_tokens = 0
-    timestamps = []
-    cost = 0.0
     try:
         with open(session_file) as f:
             for line in f:
@@ -167,244 +141,98 @@ def _parse_session_tokens(session_file: Path, calc_cost: bool = False,
                     d = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if d.get("type") == "assistant":
-                    message = d.get("message", {})
-                    if not _is_duplicate_message(message, seen_msg_ids):
-                        usage = message.get("usage", {})
-                        out = usage.get("output_tokens", 0)
-                        inp = usage.get("input_tokens", 0)
-                        cache_read = usage.get("cache_read_input_tokens", 0)
-                        cache_create = usage.get("cache_creation_input_tokens", 0)
-                        output_tokens += out
-                        input_tokens += inp + cache_read + cache_create
-                        if calc_cost:
-                            model = message.get("model", "")
-                            cost += calculate_model_cost(model, inp, out, cache_read, cache_create)
-                ts = d.get("timestamp")
-                if ts:
-                    timestamps.append(ts)
+                cwd = d.get("cwd")
+                if isinstance(cwd, str) and cwd:
+                    return cwd
     except (OSError, IOError):
         pass
-    return output_tokens, input_tokens, timestamps, cost
+    return None
 
 
-def parse_projects(with_tokens: bool = True) -> list:
-    """Parse project directories to get project summaries."""
-    from .pricing import get_pricing
+_WORKTREE_MARKER = (".claude", "worktrees")
 
-    if not PROJECTS_DIR.exists():
-        return []
 
-    has_pricing = get_pricing() is not None
-    seen_msg_ids: set = set()
-    projects = []
-    for project_dir in sorted(PROJECTS_DIR.iterdir()):
-        if not project_dir.is_dir():
-            continue
+def _repo_name_from_cwd(cwd: str) -> str:
+    """Repository name for a session's working directory.
 
-        raw_name = project_dir.name
-        parts = raw_name.split("-")
-        try:
-            ws_idx = parts.index("workspace")
-            path_parts = "-".join(parts[ws_idx + 1:]) if ws_idx + 1 < len(parts) else raw_name
-            project_name = _deduplicate_project_name(path_parts)
-        except ValueError:
-            project_name = raw_name
+    '/home/me/src/my-repo' -> 'my-repo'. Claude Code worktrees live at
+    '<repo>/.claude/worktrees/<name>' and are attributed to the repository,
+    not the (often randomly named) worktree. Only this short name is
+    displayed and synced; the rest of the path stays on this machine.
+    """
+    parts = [p for p in re.split(r"[\\/]+", cwd) if p]
+    for i in range(len(parts) - 2):
+        if (parts[i], parts[i + 1]) == _WORKTREE_MARKER:
+            parts = parts[:i]
+            break
+    if not parts or cwd.rstrip("\\/") == str(Path.home()):
+        return "home"
+    return parts[-1]
 
-        if not project_name or project_name.startswith("-Users"):
-            project_name = raw_name.rsplit("-", 1)[-1] or "home"
 
-        project_name = project_name.replace("/-", "-")
+def _project_name_from_dir(raw_name: str) -> str:
+    """Fallback: guess a project name from the encoded directory name.
 
-        if not project_name:
-            continue
+    Claude Code names project directories after the working directory with
+    path separators (and other punctuation) replaced by '-', so the original
+    path cannot be recovered reliably. Only used when no session file in the
+    directory records a ``cwd``.
+    """
+    parts = raw_name.split("-")
+    try:
+        ws_idx = parts.index("workspace")
+        path_parts = "-".join(parts[ws_idx + 1:]) if ws_idx + 1 < len(parts) else raw_name
+        project_name = _deduplicate_project_name(path_parts)
+    except ValueError:
+        project_name = raw_name
 
-        session_files = list(project_dir.glob("*.jsonl"))
-        session_count = len(session_files)
+    # An encoded absolute path ("-home-me-src-thing", or "C--Users-me-thing"
+    # on Windows): keep only the last segment rather than exposing the whole
+    # path. Hyphenated names get truncated here; this is a guess, used only
+    # for logs that recorded no working directory.
+    if not project_name or project_name.startswith("-") or re.match(r"^[A-Za-z]--", project_name):
+        project_name = raw_name.rsplit("-", 1)[-1] or "home"
 
-        total_output = 0
-        total_input = 0
-        total_cost = 0.0
-        all_timestamps = []
+    return project_name.replace("/-", "-")
 
-        if with_tokens:
-            for sf in session_files:
-                out_t, in_t, ts_list, sf_cost = _parse_session_tokens(
-                    sf, calc_cost=has_pricing, seen_msg_ids=seen_msg_ids)
-                total_output += out_t
-                total_input += in_t
-                total_cost += sf_cost
-                all_timestamps.extend(ts_list)
 
-        first_seen = None
-        last_seen = None
-        if all_timestamps:
-            all_timestamps.sort()
-            try:
-                first_seen = datetime.fromisoformat(all_timestamps[0].replace("Z", "+00:00"))
-                last_seen = datetime.fromisoformat(all_timestamps[-1].replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
-                pass
-        elif session_files:
-            mtimes = [f.stat().st_mtime for f in session_files]
-            first_seen = datetime.fromtimestamp(min(mtimes))
-            last_seen = datetime.fromtimestamp(max(mtimes))
+def parse_projects() -> list:
+    """Per-repository summaries (sessions, tokens, cost, first/last seen).
 
-        projects.append(ProjectSummary(
-            name=project_name,
-            session_count=session_count,
-            output_tokens=total_output,
-            input_tokens=total_input,
-            first_seen=first_seen,
-            last_seen=last_seen,
-            cost=total_cost,
-        ))
+    Every session is named after the repository it ran in (the last component
+    of the working directory it recorded, see _repo_name_from_cwd) and
+    sessions from the same repository are aggregated wherever Claude Code
+    stored them, subagent transcripts included. Backed by the incremental
+    session index, so only changed files are read.
+    """
+    from .index import get_index
 
-    return sorted(projects, key=lambda p: p.output_tokens, reverse=True)
+    return get_index().projects()
 
 
 def parse_today_hourly() -> list[HourlyUsage]:
-    """Parse today's usage broken down by hour (0-23)."""
-    from .pricing import calculate_model_cost, get_pricing
+    """Today's usage broken down by hour (0-23), from the session index."""
+    from .index import get_index
 
     today_str = datetime.now().strftime("%Y-%m-%d")
-    has_pricing = get_pricing() is not None
-    # hour -> {messages, sessions, tokens, cost}
-    hourly: dict[int, dict] = {h: {"messages": 0, "sessions": set(), "tokens": 0, "cost": 0.0} for h in range(24)}
-
-    if not PROJECTS_DIR.exists():
-        return []
-
-    seen_msg_ids: set = set()
-    for project_dir in PROJECTS_DIR.iterdir():
-        if not project_dir.is_dir():
-            continue
-        for session_file in project_dir.glob("*.jsonl"):
-            if datetime.fromtimestamp(session_file.stat().st_mtime).strftime("%Y-%m-%d") != today_str:
-                continue
-            try:
-                with open(session_file) as f:
-                    for line in f:
-                        try:
-                            d = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        local_dt = _utc_to_local(d.get("timestamp", ""))
-                        if local_dt is None or local_dt.strftime("%Y-%m-%d") != today_str:
-                            continue
-                        hour = local_dt.hour
-                        msg_type = d.get("type")
-                        if msg_type == "user":
-                            hourly[hour]["messages"] += 1
-                            hourly[hour]["sessions"].add(str(session_file))
-                        elif msg_type == "assistant":
-                            hourly[hour]["messages"] += 1
-                            hourly[hour]["sessions"].add(str(session_file))
-                            message = d.get("message", {})
-                            if _is_duplicate_message(message, seen_msg_ids):
-                                continue
-                            usage = message.get("usage", {})
-                            out = usage.get("output_tokens", 0)
-                            hourly[hour]["tokens"] += out
-                            if has_pricing:
-                                inp = usage.get("input_tokens", 0)
-                                cache_read = usage.get("cache_read_input_tokens", 0)
-                                cache_create = usage.get("cache_creation_input_tokens", 0)
-                                model = message.get("model", "")
-                                hourly[hour]["cost"] += calculate_model_cost(
-                                    model, inp, out, cache_read, cache_create
-                                )
-            except (OSError, IOError):
-                continue
-
-    return [
-        HourlyUsage(
-            hour=h,
-            message_count=info["messages"],
-            session_count=len(info["sessions"]),
-            tokens=info["tokens"],
-            cost=info["cost"],
-        )
-        for h, info in sorted(hourly.items())
-    ]
+    return get_index().hourly(today_str)
 
 
-def parse_today_usage() -> Optional[DailyActivity]:
-    """Calculate today's usage by scanning recent session files."""
+def parse_today_usage() -> Optional[tuple]:
+    """Today's (DailyActivity, DailyModelTokens) from the session index, or None."""
+    from .index import get_index
+
     today_str = datetime.now().strftime("%Y-%m-%d")
-    message_count = 0
-    session_count = 0
-    tool_call_count = 0
-    today_tokens: dict = {}
-
-    if not PROJECTS_DIR.exists():
-        return None
-
-    seen_msg_ids: set = set()
-    for project_dir in PROJECTS_DIR.iterdir():
-        if not project_dir.is_dir():
-            continue
-        for session_file in project_dir.glob("*.jsonl"):
-            # Only inspect files modified today
-            if datetime.fromtimestamp(session_file.stat().st_mtime).strftime("%Y-%m-%d") != today_str:
-                continue
-            session_has_today = False
-            try:
-                with open(session_file) as f:
-                    for line in f:
-                        try:
-                            d = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        local_dt = _utc_to_local(d.get("timestamp", ""))
-                        if local_dt is None or local_dt.strftime("%Y-%m-%d") != today_str:
-                            continue
-                        msg_type = d.get("type")
-                        if msg_type == "user":
-                            message_count += 1
-                            session_has_today = True
-                        elif msg_type == "assistant":
-                            message_count += 1
-                            message = d.get("message", {})
-                            # Count tool_use blocks (each JSONL line carries its own block)
-                            content = message.get("content", [])
-                            if isinstance(content, list):
-                                tool_call_count += sum(
-                                    1 for c in content
-                                    if isinstance(c, dict) and c.get("type") == "tool_use"
-                                )
-                            if _is_duplicate_message(message, seen_msg_ids):
-                                continue
-                            usage = message.get("usage", {})
-                            out = usage.get("output_tokens", 0)
-                            model = message.get("model", "unknown")
-                            today_tokens[model] = today_tokens.get(model, 0) + out
-            except (OSError, IOError):
-                continue
-            if session_has_today:
-                session_count += 1
-
-    if message_count == 0:
-        return None
-
-    return DailyActivity(
-        date=today_str,
-        message_count=message_count,
-        session_count=session_count,
-        tool_call_count=tool_call_count,
-    ), DailyModelTokens(
-        date=today_str,
-        tokens_by_model=today_tokens,
-    )
+    return get_index().day_usage(today_str)
 
 
 def load_usage_data() -> UsageData:
     """Load all usage data from local Claude Code files."""
     hostname = get_hostname()
-    stats = parse_stats_cache()
-
-    if stats is None:
-        return UsageData(hostname=hostname)
+    # stats-cache.json is written by Claude Code itself and may be absent
+    # (fresh install, cloud container); the session files still exist, so
+    # projects and today's figures are reported regardless.
+    stats = parse_stats_cache() or {}
 
     daily_activity = [
         DailyActivity(

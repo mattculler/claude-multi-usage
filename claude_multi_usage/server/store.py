@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -24,6 +25,7 @@ class Store:
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.row_factory = sqlite3.Row
         self._init_tables()
+        self._purge_encoded_path_project_names()
 
     def _init_tables(self):
         self._conn.executescript("""
@@ -59,6 +61,29 @@ class Store:
         except sqlite3.OperationalError:
             pass  # no email column; nothing to migrate
         self._conn.commit()
+
+    def _purge_encoded_path_project_names(self) -> None:
+        """Drop stored project entries whose names are encoded local paths.
+
+        Clients before the repository-name change uploaded names such as
+        '-home-me-src-repo'. Left in place they would sit next to the new
+        short names, double count in the merged view, and keep exposing
+        paths the current client never sends.
+        """
+        rows = self._conn.execute("SELECT hostname, data FROM devices").fetchall()
+        changed = False
+        for row in rows:
+            payload = SyncPayload.model_validate_json(row["data"])
+            kept = [p for p in payload.projects if not _is_encoded_path_name(p.name)]
+            if len(kept) != len(payload.projects):
+                payload.projects = kept
+                self._conn.execute(
+                    "UPDATE devices SET data = ? WHERE hostname = ?",
+                    (payload.model_dump_json(), row["hostname"]),
+                )
+                changed = True
+        if changed:
+            self._conn.commit()
 
     def upsert_device(self, payload: SyncPayload) -> None:
         existing = self.get_device_data(payload.hostname)
@@ -210,10 +235,18 @@ def _merge_daily_model_tokens(
 
 
 
+def _is_encoded_path_name(name: str) -> bool:
+    """True for names older clients derived from the encoded working directory
+    ('-home-me-src-repo', or 'C--Users-me-repo' on Windows)."""
+    return name.startswith("-") or re.match(r"^[A-Za-z]--", name) is not None
+
+
 def _merge_projects(
     old: list[DeviceProject], new: list[DeviceProject]
 ) -> list[DeviceProject]:
-    by_name: dict[str, DeviceProject] = {p.name: p for p in old}
+    by_name: dict[str, DeviceProject] = {
+        p.name: p for p in old if not _is_encoded_path_name(p.name)
+    }
     for p in new:
         if p.name in by_name:
             prev = by_name[p.name]
