@@ -278,7 +278,9 @@ def main(ctx):
     Data source:
       Reads ~/.claude/stats-cache.json and session .jsonl files.
       No API keys required. Network is used only to fetch model pricing
-      from LiteLLM's GitHub repo (cached 24h) and for opt-in `cmu sync`.
+      from LiteLLM's GitHub repo (cached 24h), for the opt-in sync
+      commands (sync, autosync, import-claude-export) and for
+      `cmu remote` over your own ssh.
     """
     if ctx.invoked_subcommand is None:
         ctx.invoke(dashboard)
@@ -714,6 +716,7 @@ def sync(quiet: bool, if_changed: bool):
                               else "[green]Synced.[/green]")
             return
         payload = sync_now()
+        autosync.record_success()
     except SyncError as e:
         if not quiet:
             console.print(f"[red]{e}[/red]")
@@ -740,12 +743,13 @@ def import_claude_export(path: str, alias: str, dry_run: bool):
     The export covers every client of the account (web, desktop, Android,
     iOS). Message counts and dates are exact; tokens are estimated from
     text length (about 4 characters per token) under the model name
-    "claude.ai (estimated)". Re-importing a newer export replaces the
-    days it covers; nothing is double counted.
+    "claude.ai (estimated)". Each account becomes its own device,
+    claude.ai-<id>. An export is a snapshot, so each import replaces the
+    previous one on the server: the most recent import wins.
     """
     from rich.panel import Panel
     from rich.table import Table
-    from .claude_export import EXPORT_HOSTNAME, ExportError, describe, load_export, summarize_export
+    from .claude_export import ExportError, describe, load_export, summarize_export
     from .sync_client import SyncError, post_payload, require_server_config
 
     console = Console()
@@ -781,7 +785,7 @@ def import_claude_export(path: str, alias: str, dry_run: bool):
     except SyncError as e:
         console.print(f"[red]{e}[/red]")
         raise SystemExit(1)
-    console.print(f"[green]Imported to {server_url}[/green] as device '{EXPORT_HOSTNAME}' "
+    console.print(f"[green]Imported to {server_url}[/green] as device '{payload['hostname']}' "
                   f"(keys: {', '.join(key_values)})")
     console.print()
 
@@ -908,11 +912,14 @@ def remote_group():
 @click.option("--python", default="python3", show_default=True, help="Python interpreter on the remote host.")
 @click.option("--ssh-option", "ssh_options", multiple=True, metavar="OPT",
               help='Extra ssh option, repeatable, e.g. "-o StrictHostKeyChecking=accept-new".')
+@click.option("--linger", is_flag=True,
+              help="Linux remote: run the job while logged out too (loginctl enable-linger).")
 def remote_install(host: str, every: int, server_url: str, key_values: tuple, alias: str,
-                   source: str, python: str, ssh_options: tuple):
+                   source: str, python: str, ssh_options: tuple, linger: bool):
     """Install cmu and its autosync job on HOST (an ssh destination)."""
     import shlex
     import subprocess
+    from urllib.parse import urlparse
     from . import remote
     from .config import get_keys, get_server_url
 
@@ -921,6 +928,9 @@ def remote_install(host: str, every: int, server_url: str, key_values: tuple, al
     if not server_url:
         console.print("[red]No server URL: pass --server or run `cmu config server <url>` here first.[/red]")
         raise SystemExit(1)
+    if (urlparse(server_url).hostname or "") in ("localhost", "127.0.0.1", "::1"):
+        console.print(f"[yellow]Warning:[/yellow] {server_url} points at this machine; from {host} "
+                      "that address is the remote itself. Pass --server with an address it can reach.")
     keys = [(k, "") for k in key_values] or [(k["key"], k.get("description", "")) for k in get_keys()]
     if not keys:
         console.print("[red]No keys: pass --key or run `cmu config key add <key>` here first.[/red]")
@@ -928,9 +938,12 @@ def remote_install(host: str, every: int, server_url: str, key_values: tuple, al
     opts = [o for group in ssh_options for o in shlex.split(group)]
     try:
         lines = remote.install(host, server_url, keys, every, alias=alias, source=source,
-                               python=python, ssh_options=opts)
+                               python=python, ssh_options=opts, linger=linger)
     except subprocess.CalledProcessError as e:
-        console.print(f"[red]ssh to {host} failed (exit {e.returncode}).[/red]")
+        if e.returncode == 255:
+            console.print(f"[red]ssh to {host} failed (exit 255): check the host name, keys and network.[/red]")
+        else:
+            console.print(f"[red]Setup on {host} failed (exit {e.returncode}); see the output above.[/red]")
         raise SystemExit(1)
     except (RuntimeError, OSError) as e:
         console.print(f"[red]{e}[/red]")

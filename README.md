@@ -151,7 +151,7 @@ cmu autosync status
 cmu autosync uninstall
 ```
 
-On Linux this is a systemd user timer (`~/.config/systemd/user/cmu-autosync.timer`); it runs while you are logged in, or always with `cmu autosync install --linger` (`loginctl enable-linger`). On macOS it is a launchd agent in `~/Library/LaunchAgents`, logging to `~/.claude-multi-usage/autosync.log`. The job runs `cmu autosync run`, which compares a fingerprint of `~/.claude` with the one from the last successful sync; an idle machine never contacts the server. `cmu sync --if-changed` does the same check for a shell wrapper such as:
+On Linux this is a systemd user timer (`~/.config/systemd/user/cmu-autosync.timer`); it runs while you are logged in, or always with `cmu autosync install --linger` (`loginctl enable-linger`). On macOS it is a launchd agent in `~/Library/LaunchAgents`, logging to `~/.claude-multi-usage/autosync.log`. The job runs `cmu autosync run`, which compares a fingerprint of `~/.claude` and the sync settings with the one from the last successful sync; an idle machine never contacts the server. `cmu sync --if-changed` does the same check for a shell wrapper such as:
 
 ```bash
 cc() {
@@ -172,7 +172,7 @@ cmu remote install laptop --from git+https://github.com/mattculler/claude-multi-
 cmu remote uninstall laptop
 ```
 
-The remote gets a virtualenv in `~/.local/share/cmu`, a `~/.local/bin/cmu` link, this machine's server URL and keys (override with `--server` and `--key`), and `cmu autosync install`. When run from a source checkout, that checkout is sent over; otherwise the repository URL is installed with pip. The remote needs Python 3.9+ with `venv` (Debian/Ubuntu: `python3-venv`), and must be able to reach PyPI for the dependencies.
+The remote gets a virtualenv in `~/.local/share/cmu`, a `~/.local/bin/cmu` link, this machine's server URL and keys (override with `--server` and `--key`), and `cmu autosync install` (add `--linger` for a Linux remote that should sync while nobody is logged in). When run from a source checkout, the checkout's git-tracked files are sent over; otherwise the repository URL is installed with pip, which needs `git` and GitHub access on the remote. The remote needs `bash` and Python 3.9+ with `venv` (Debian/Ubuntu: `python3-venv`; macOS: the Xcode command-line tools) and must be able to reach PyPI for the dependencies. On a Mac that nobody is logged in to, the launchd agent is installed but only starts at the next login. Make sure the server URL is one the remote can reach (not `localhost`).
 
 ### claude.ai chats (web, desktop, Android, iOS)
 
@@ -183,7 +183,7 @@ cmu import-claude-export ~/Downloads/data-2026-10-06.zip
 cmu import-claude-export ~/Downloads/data-2026-10-06.zip --dry-run   # inspect without sending
 ```
 
-The export is account-wide, so it covers conversations from every client including the phone apps. It is imported as a device named `claude.ai`, visible in `cmu diff`. Message and conversation counts and dates are exact; the export has no token counts or model names, so tokens are estimated from text length (about 4 characters per token) under the model name `claude.ai (estimated)`. Re-importing a newer export replaces the days it covers, so nothing is double counted. The export cannot be automated or scheduled: request it by hand at whatever cadence you like.
+The export is account-wide, so it covers conversations from every client including the phone apps. Each account is imported as its own device, `claude.ai-<id>` (alias `claude.ai`, change it with `--alias`), visible in `cmu diff`. Message and conversation counts and dates are exact; the export has no token counts or model names, so tokens are estimated from text length (about 4 characters per token, so non-English text is underestimated) under the model name `claude.ai (estimated)`, and the merged view marks totals that include them. An export is a complete snapshot of the account, so each import replaces the previous one on the server (older servers without snapshot support merge day by day instead): the most recent import wins. Days are bucketed in the local time zone of the machine that runs the import. The export cannot be automated or scheduled: request it by hand at whatever cadence you like.
 
 ## Dashboard Preview
 

@@ -2,6 +2,7 @@ import io
 import shutil
 import subprocess
 import tarfile
+from importlib import metadata
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,30 @@ def _bash_syntax_ok(script: str) -> bool:
     return subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True).returncode == 0
 
 
+def _make_checkout(tmp_path, git=False):
+    src = tmp_path / "checkout"
+    shutil.copytree(CHECKOUT / "claude_multi_usage", src / "claude_multi_usage",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy(CHECKOUT / "pyproject.toml", src / "pyproject.toml")
+    shutil.copy(CHECKOUT / "README.md", src / "README.md")
+    if git:
+        subprocess.run(["git", "init", "-q", str(src)], check=True)
+        subprocess.run(["git", "-C", str(src), "add", "."], check=True)
+    # junk that must never travel
+    (src / ".venv" / "lib").mkdir(parents=True)
+    (src / ".venv" / "lib" / "big.so").write_bytes(b"\0" * 1000)
+    (src / "claude_multi_usage" / "__pycache__").mkdir()
+    (src / "claude_multi_usage" / "__pycache__" / "cli.pyc").write_bytes(b"\0")
+    (src / "claude_multi_usage.egg-info").mkdir()
+    (src / "claude_multi_usage.egg-info" / "PKG-INFO").write_text("x")
+    (src / ".env").write_text("SECRET=1")
+    (src / "server.db").write_bytes(b"\0" * 10)
+    (src / ".claude").mkdir()
+    (src / ".claude" / "settings.local.json").write_text("{}")
+    (src / "data-2026-10-06.zip").write_bytes(b"PK")
+    return src
+
+
 def test_default_source_is_this_checkout():
     assert (CHECKOUT / "pyproject.toml").exists()
     assert remote.default_source() == str(CHECKOUT)
@@ -25,52 +50,59 @@ def test_default_source_is_this_checkout():
 
 def test_default_source_falls_back_to_repository_url(monkeypatch, tmp_path):
     monkeypatch.setattr(remote, "PACKAGE_DIR", tmp_path / "site-packages" / "claude_multi_usage")
-    assert remote.default_source().startswith("git+https://github.com/")
+
+    class Meta:
+        def get_all(self, key):
+            return ["Homepage, https://example.com/x", "Repository, https://github.com/me/cmu"] if key == "Project-URL" else None
+
+    monkeypatch.setattr(metadata, "metadata", lambda name: Meta())
+    assert remote.default_source() == "git+https://github.com/me/cmu"
+
+    def missing(name):
+        raise metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(metadata, "metadata", missing)
+    with pytest.raises(RuntimeError, match="--from"):
+        remote.default_source()
 
 
-def test_make_tarball_contains_the_package_without_junk(tmp_path):
-    src = tmp_path / "checkout"
-    shutil.copytree(CHECKOUT / "claude_multi_usage", src / "claude_multi_usage",
-                    ignore=shutil.ignore_patterns("__pycache__"))
-    shutil.copy(CHECKOUT / "pyproject.toml", src / "pyproject.toml")
-    shutil.copy(CHECKOUT / "README.md", src / "README.md")
-    (src / ".git").mkdir()
-    (src / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
-    (src / ".venv" / "lib").mkdir(parents=True)
-    (src / ".venv" / "lib" / "big.so").write_bytes(b"\0" * 1000)
-    (src / "claude_multi_usage" / "__pycache__").mkdir()
-    (src / "claude_multi_usage" / "__pycache__" / "cli.pyc").write_bytes(b"\0")
-    (src / "claude_multi_usage.egg-info").mkdir()
-    (src / "claude_multi_usage.egg-info" / "PKG-INFO").write_text("x")
-
+@pytest.mark.parametrize("git", [False, True])
+def test_make_tarball_sends_only_source_files(tmp_path, git):
+    if git and not shutil.which("git"):
+        pytest.skip("git not available")
+    src = _make_checkout(tmp_path, git=git)
     data = remote.make_tarball(src)
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
         names = tar.getnames()
     assert "src/pyproject.toml" in names
     assert "src/claude_multi_usage/cli.py" in names
-    assert not any(".git" in n or ".venv" in n or "__pycache__" in n or "egg-info" in n for n in names)
+    for bad in (".git", ".venv", "__pycache__", "egg-info", ".env", "server.db", ".claude", ".zip"):
+        assert not any(bad in n for n in names), (bad, names)
     assert len(data) < 2_000_000
 
 
 def test_install_script_is_valid_bash_and_configures_everything():
     script = remote.install_script(True, None, "http://10.0.0.5:8000", [("k1", "team key"), ("k2", "")],
-                                   alias="office box", every_minutes=7, python="python3.12")
+                                   alias="office box", every_minutes=7, python="python3.12", linger=True)
     assert _bash_syntax_ok(script)
     assert "PY=python3.12" in script
     assert 'pip install --quiet --upgrade "$BASE/src"' in script
+    assert 'rm -rf "$BASE/src"' in script
     assert '"$VENV/bin/cmu" config server http://10.0.0.5:8000' in script
     assert "config key add k1 'team key'" in script
     assert "config key add k2 ''" in script
     assert "config alias 'office box'" in script
-    assert "autosync install --every 7" in script
-    assert "autosync run --force" in script
+    assert "autosync install --every 7 --linger" in script
+    assert "autosync run --force" not in script  # install already performs the first sync
+    assert 'readlink "$LINK"' in script  # never clobber someone else's ~/.local/bin/cmu
     assert "sys.version_info >= (3, 9)" in script
 
     req = remote.install_script(False, "git+https://github.com/x/y.git", "http://s", [("k", "")], None, 15)
     assert _bash_syntax_ok(req)
     assert "pip install --quiet --upgrade git+https://github.com/x/y.git" in req
-    assert "config alias" not in req
+    assert "config alias" not in req and "--linger" not in req
     assert _bash_syntax_ok(remote.uninstall_script())
+    assert 'readlink "$LINK"' in remote.uninstall_script()
 
 
 def test_install_streams_checkout_then_runs_script(tmp_path):
@@ -84,7 +116,7 @@ def test_install_streams_checkout_then_runs_script(tmp_path):
         calls.append((host, args, input_bytes, ssh_options))
 
     lines = remote.install("alice@box", "http://s:8000", [("k1", "")], 15, alias="box",
-                           source=str(src), ssh_options=["-p", "2222"], run=fake_ssh)
+                           source=str(src), ssh_options=["-p", "2222"], linger=True, run=fake_ssh)
     assert len(calls) == 2
     host, args, tarball, opts = calls[0]
     assert host == "alice@box" and opts == ["-p", "2222"]
@@ -93,7 +125,7 @@ def test_install_streams_checkout_then_runs_script(tmp_path):
         assert "src/pyproject.toml" in tar.getnames()
     host, args, script, _ = calls[1]
     assert args == ["bash", "-s"]
-    assert b'config alias box' in script and b'"$BASE/src"' in script
+    assert b"config alias box" in script and b'"$BASE/src"' in script and b"--linger" in script
     assert any("sent this checkout" in line for line in lines)
 
 
@@ -120,29 +152,31 @@ def test_cli_remote_install_uses_local_config_by_default(fake_home, monkeypatch)
     seen = {}
 
     def fake_install(host, server_url, keys, every, alias=None, source=None, python="python3",
-                     ssh_options=None):
+                     ssh_options=None, linger=False):
         seen.update(host=host, server_url=server_url, keys=keys, every=every, alias=alias,
-                    source=source, python=python, ssh_options=ssh_options)
+                    source=source, python=python, ssh_options=ssh_options, linger=linger)
         return ["done"]
 
     monkeypatch.setattr(remote, "install", fake_install)
     r = CliRunner().invoke(cli.main, ["remote", "install", "box", "--every", "5", "--alias", "lap",
-                                      "--ssh-option", "-o StrictHostKeyChecking=accept-new"])
+                                      "--ssh-option", "-o StrictHostKeyChecking=accept-new", "--linger"])
     assert r.exit_code == 0, r.output
     assert seen == {"host": "box", "server_url": "http://sync.invalid", "keys": [("k1", "team")],
                     "every": 5, "alias": "lap", "source": None, "python": "python3",
-                    "ssh_options": ["-o", "StrictHostKeyChecking=accept-new"]}
-    assert "done" in r.output
+                    "ssh_options": ["-o", "StrictHostKeyChecking=accept-new"], "linger": True}
+    assert "done" in r.output and "Warning" not in r.output
 
 
-def test_cli_remote_install_overrides(fake_home, monkeypatch):
+def test_cli_remote_install_overrides_and_localhost_warning(fake_home, monkeypatch):
     seen = {}
     monkeypatch.setattr(remote, "install", lambda host, server_url, keys, every, **kw: seen.update(
         server_url=server_url, keys=keys, **kw) or [])
-    r = CliRunner().invoke(cli.main, ["remote", "install", "box", "--server", "http://x", "--key", "a",
-                                      "--key", "b", "--from", "git+https://g/r.git", "--python", "python3.11"])
+    r = CliRunner().invoke(cli.main, ["remote", "install", "box", "--server", "http://localhost:8000",
+                                      "--key", "a", "--key", "b", "--from", "git+https://g/r.git",
+                                      "--python", "python3.11"])
     assert r.exit_code == 0, r.output
-    assert seen["server_url"] == "http://x" and seen["keys"] == [("a", ""), ("b", "")]
+    assert "Warning" in r.output and "points at this machine" in r.output
+    assert seen["server_url"] == "http://localhost:8000" and seen["keys"] == [("a", ""), ("b", "")]
     assert seen["source"] == "git+https://g/r.git" and seen["python"] == "python3.11"
 
 
@@ -154,16 +188,17 @@ def test_cli_remote_install_requires_config(fake_home):
     assert r.exit_code == 1 and "No keys" in r.output
 
 
-def test_cli_remote_install_reports_ssh_failure(fake_home, monkeypatch):
+@pytest.mark.parametrize("code,text", [(255, "ssh to box failed"), (1, "Setup on box failed (exit 1)")])
+def test_cli_remote_install_reports_failures(fake_home, monkeypatch, code, text):
     config.set_server_url("http://x")
     config.add_key("k")
 
     def failing(*a, **k):
-        raise subprocess.CalledProcessError(255, ["ssh"])
+        raise subprocess.CalledProcessError(code, ["ssh"])
 
     monkeypatch.setattr(remote, "install", failing)
     r = CliRunner().invoke(cli.main, ["remote", "install", "box"])
-    assert r.exit_code == 1 and "ssh to box failed (exit 255)" in r.output
+    assert r.exit_code == 1 and text in r.output
 
 
 def test_cli_remote_uninstall(fake_home, monkeypatch):

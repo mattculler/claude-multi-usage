@@ -87,8 +87,11 @@ class Store:
 
     def upsert_device(self, payload: SyncPayload) -> None:
         existing = self.get_device_data(payload.hostname)
-        if existing is not None:
+        if existing is not None and not payload.snapshot:
             payload = _merge_payloads(existing, payload)
+        elif existing is not None:
+            # A snapshot replaces everything but keeps an alias it did not set.
+            payload.alias = payload.alias or existing.alias
 
         self._conn.execute(
             """INSERT INTO devices (hostname, last_synced, data, alias)

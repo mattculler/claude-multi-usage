@@ -63,6 +63,10 @@ class SyncPayload(BaseModel):
     today_hourly: list[DeviceHourlyUsage] = []
     # The local date (on the device) that today_hourly describes
     today_hourly_date: Optional[str] = None
+    # True when the payload is a complete picture of the device (e.g. a
+    # claude.ai export): the server then replaces stored data instead of
+    # merging day by day.
+    snapshot: bool = False
     total_sessions: int = 0
     total_messages: int = 0
     first_session_date: Optional[str] = None

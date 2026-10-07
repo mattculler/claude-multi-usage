@@ -162,3 +162,38 @@ def test_diff_renders_remote_totals_without_local_cost(fake_home, monkeypatch):
     assert merged.exit_code == 0, merged.output
     assert "42" in merged.output
     assert "$" not in merged.output
+
+
+def test_sync_reports_http_error_details(fake_home, monkeypatch):
+    """A FastAPI 422 carries a list in `detail`; it must not become a traceback."""
+    import io
+    import urllib.error
+
+    config.set_server_url("http://sync.invalid")
+    config.add_key("k1")
+
+    def fake_urlopen(req, timeout=None):
+        body = io.BytesIO(b'{"detail": [{"loc": ["body", "x"], "msg": "field required"}]}')
+        raise urllib.error.HTTPError(req.full_url, 422, "Unprocessable Entity", {}, body)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    result = CliRunner().invoke(cli.main, ["sync"])
+    assert result.exit_code == 1
+    assert "Sync failed: HTTP Error 422" in result.output and "field required" in result.output
+
+    def plain_413(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 413, "Too Large", {}, io.BytesIO(b'{"detail":"too big"}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", plain_413)
+    result = CliRunner().invoke(cli.main, ["sync"])
+    assert result.exit_code == 1 and "413" in result.output and "too big" in result.output
+
+
+def test_sync_reports_malformed_server_url(fake_home, monkeypatch):
+    config.set_server_url("http://[::1")
+    config.add_key("k1")
+    result = CliRunner().invoke(cli.main, ["sync"])
+    assert result.exit_code == 1 and "Sync failed" in result.output
+    config.set_server_url("http://host:80a")
+    result = CliRunner().invoke(cli.main, ["sync"])
+    assert result.exit_code == 1 and "Sync failed" in result.output

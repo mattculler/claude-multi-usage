@@ -5,6 +5,7 @@ Shared by ``cmu sync``, ``cmu autosync run`` and ``cmu import-claude-export``.
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -80,24 +81,33 @@ def build_sync_payload(key_values: list[str]) -> dict:
 def post_payload(server_url: str, payload: dict) -> dict:
     """POST a payload to ``<server_url>/api/sync``; raise SyncError on failure."""
     body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        f"{server_url}/api/sync",
-        data=body,
-        headers={"Content-Type": "application/json", "User-Agent": "cmu"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            f"{server_url}/api/sync",
+            data=body,
+            headers={"Content-Type": "application/json", "User-Agent": "cmu"},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            detail = json.loads(e.read()).get("detail", "")
-        except Exception:
-            pass
-        raise SyncError(f"Sync failed: {e}{' - ' + detail if detail else ''}") from e
-    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise SyncError(f"Sync failed: {e}{_http_detail(e)}") from e
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as e:
         raise SyncError(f"Sync failed: {e}") from e
+
+
+def _http_detail(e: urllib.error.HTTPError) -> str:
+    """' - <detail>' from a JSON error body, whatever shape the server used."""
+    try:
+        body = json.loads(e.read())
+    except Exception:
+        return ""
+    detail = body.get("detail") if isinstance(body, dict) else body
+    if not detail:
+        return ""
+    if not isinstance(detail, str):
+        detail = json.dumps(detail)
+    return " - " + detail[:500]
 
 
 def sync_now() -> dict:

@@ -22,6 +22,18 @@ def format_tokens(n: int) -> str:
     return str(n)
 
 
+ESTIMATED_NOTE = ("Figures marked (estimated) come from claude.ai exports: tokens are estimated "
+                  "from text length, and chat messages count as messages.")
+
+
+def is_estimated_model(model: str) -> bool:
+    return model.endswith("(estimated)")
+
+
+def has_estimated_usage(data: UsageData) -> bool:
+    return any(is_estimated_model(m.model) for m in data.model_usage)
+
+
 def make_summary_panel(data: UsageData, local: bool = True, costs: tuple | None = None) -> Panel:
     """Overall summary stats.
 
@@ -45,7 +57,11 @@ def make_summary_panel(data: UsageData, local: bool = True, costs: tuple | None 
         table.add_row("First Session", first)
 
     total_output = sum(m.output_tokens for m in data.model_usage)
-    table.add_row("Total Output Tokens", format_tokens(total_output))
+    estimated = sum(m.output_tokens for m in data.model_usage if is_estimated_model(m.model))
+    tokens_label = format_tokens(total_output)
+    if estimated:
+        tokens_label += f" (incl. ~{format_tokens(estimated)} est.)"
+    table.add_row("Total Output Tokens", tokens_label)
 
     if not local:
         table.add_row("Estimated Cost", "[dim]n/a (not synced)[/dim]")
@@ -292,6 +308,8 @@ def render_dashboard(data: UsageData, days: int = 14,
     # Summary + Models side by side
     console.print(Columns([make_summary_panel(data, local=local, costs=costs),
                            make_models_table(data, local=local, costs=costs)], equal=True))
+    if has_estimated_usage(data):
+        console.print(f"[dim]{ESTIMATED_NOTE}[/dim]")
     console.print()
 
     # Daily chart (with cost data if available)
@@ -352,6 +370,8 @@ def render_multi_device_dashboard(
         # Summary + Models side by side (remote data: no local cost lookup)
         console.print(Columns([make_summary_panel(data, local=False),
                                make_models_table(data, local=False)], equal=True))
+        if has_estimated_usage(data):
+            console.print(f"[dim]{ESTIMATED_NOTE}[/dim]")
         console.print()
 
         # Daily chart
