@@ -186,6 +186,19 @@ def test_uninstall_runs_script():
     assert remote.uninstall("box", run=lambda *a: calls.append(a)) == ["cmu removed from box"]
     assert calls[0][1] == ["bash", "-s"] and b"autosync uninstall" in calls[0][2]
 
+    def nothing_there(*a):
+        raise subprocess.CalledProcessError(remote.NOTHING_TO_REMOVE, ["ssh"])
+
+    assert remote.uninstall("box", run=nothing_there) == [
+        "no cmu install found on box; nothing removed"
+    ]
+
+    def ssh_broken(*a):
+        raise subprocess.CalledProcessError(255, ["ssh"])
+
+    with pytest.raises(subprocess.CalledProcessError):
+        remote.uninstall("box", run=ssh_broken)
+
 
 # -- CLI --------------------------------------------------------------------------
 
@@ -314,6 +327,18 @@ def test_cli_remote_uninstall(fake_home, monkeypatch):
     assert r.exit_code == 0 and "cmu removed from box" in r.output
 
 
+@pytest.mark.parametrize(
+    "code,text", [(255, "ssh to box failed"), (1, "Uninstall on box failed (exit 1)")]
+)
+def test_cli_remote_uninstall_reports_failures(fake_home, monkeypatch, code, text):
+    def failing(*a, **k):
+        raise subprocess.CalledProcessError(code, ["ssh"])
+
+    monkeypatch.setattr(remote, "uninstall", failing)
+    r = CliRunner().invoke(cli.main, ["remote", "uninstall", "box"])
+    assert r.exit_code == 1 and text in r.output
+
+
 # -- the scripts, run for real against a fake uv -----------------------------------
 
 
@@ -352,6 +377,7 @@ case "$*" in
     "tool dir") echo "$TOOLS" ;;
     "tool dir --bin") echo "$BINDIR" ;;
     "tool install"*)
+        if [ -n "${FAKE_UV_FAIL:-}" ]; then echo "fake uv: install failed" >&2; exit 1; fi
         mkdir -p "$TOOLS/claude-multi-usage/bin" "$BINDIR"
         for exe in cmu claude-multi-usage; do
             target="$TOOLS/claude-multi-usage/bin/$exe"
@@ -375,14 +401,21 @@ case "$*" in
 esac
 """
 
-_INSTALL = remote.install_script(
-    True, None, "http://10.0.0.5:8000", [("k1", "team")], "box", 7, linger=True
-)
+
+def _install():
+    return remote.install_script(
+        True, None, "http://10.0.0.5:8000", [("k1", "team")], "box", 7, linger=True
+    )
 
 
 @pytest.fixture
-def fake_remote(tmp_path):
-    """A throwaway HOME, a PATH holding only the tools the scripts need, and helpers."""
+def fake_remote(tmp_path, monkeypatch):
+    """A throwaway HOME, a PATH holding only the tools the scripts need, and helpers.
+
+    The scripts also look for uv in /opt/homebrew/bin and /usr/local/bin; those are
+    pointed at nothing so a real uv on the test machine stays out of the picture.
+    """
+    monkeypatch.setattr(remote, "UV_FALLBACKS", ("$HOME/.local/bin/uv", f"{tmp_path}/none/uv"))
     needed = (
         "bash",
         "hostname",
@@ -412,11 +445,12 @@ def fake_remote(tmp_path):
         where.chmod(0o755)
         return where
 
-    def run(script, extra_path=()):
+    def run(script, extra_path=(), **env_extra):
         env = {
             "HOME": str(home),
             "USER": "tester",
             "PATH": os.pathsep.join([*(str(p) for p in extra_path), str(path_dir)]),
+            **env_extra,
         }
         return subprocess.run(["bash", "-s"], input=script, text=True, capture_output=True, env=env)
 
@@ -438,7 +472,7 @@ def fake_remote(tmp_path):
 def test_script_prefers_the_uv_on_path(fake_remote):
     fake_remote.make_uv(fake_remote.bin / "uv", tag="local")
     on_path = fake_remote.make_uv(fake_remote.home / "elsewhere" / "uv", tag="path")
-    res = fake_remote.run(_INSTALL, extra_path=[on_path.parent])
+    res = fake_remote.run(_install(), extra_path=[on_path.parent])
     assert res.returncode == 0, res.stderr
     assert "uv[path] tool install" in fake_remote.log("uv.log")
     assert "uv[local]" not in fake_remote.log("uv.log")
@@ -460,7 +494,7 @@ def test_script_installs_uv_only_when_missing(fake_remote, downloader):
     dl.mkdir()
     (dl / downloader).write_text('#!/bin/sh\ncat "$HOME/installer.sh"\n')
     (dl / downloader).chmod(0o755)
-    res = fake_remote.run(_INSTALL, extra_path=[dl])
+    res = fake_remote.run(_install(), extra_path=[dl])
     assert res.returncode == 0, res.stderr
     assert "installing uv into" in res.stdout
     assert fake_remote.log("installer.log").strip() == (
@@ -469,13 +503,13 @@ def test_script_installs_uv_only_when_missing(fake_remote, downloader):
     assert "uv[downloaded] tool install" in fake_remote.log("uv.log")
     # second run: uv is there now, so the downloader must not be used again
     (fake_remote.home / "installer.log").unlink()
-    res = fake_remote.run(_INSTALL, extra_path=[dl])
+    res = fake_remote.run(_install(), extra_path=[dl])
     assert res.returncode == 0, res.stderr
     assert "installing uv into" not in res.stdout and fake_remote.log("installer.log") == ""
 
 
 def test_script_fails_clearly_without_curl_or_wget(fake_remote):
-    res = fake_remote.run(_INSTALL)
+    res = fake_remote.run(_install())
     assert res.returncode == 1
     assert "curl or wget is needed" in res.stderr
 
@@ -485,7 +519,7 @@ def test_script_never_clobbers_a_foreign_command(fake_remote, foreign):
     fake_remote.make_uv(fake_remote.bin / "uv")
     (fake_remote.bin / foreign).write_text("#!/bin/sh\necho foreign\n")
     (fake_remote.bin / foreign).chmod(0o755)
-    res = fake_remote.run(_INSTALL)
+    res = fake_remote.run(_install())
     assert res.returncode == 0, res.stderr
     assert f"{foreign} exists and is not ours" in res.stdout
     assert (fake_remote.bin / foreign).read_text() == "#!/bin/sh\necho foreign\n"
@@ -500,16 +534,29 @@ def test_script_replaces_a_venv_era_install(fake_remote):
     old.write_text("#!/bin/sh\n")
     old.chmod(0o755)
     (fake_remote.bin / "cmu").symlink_to(old)
-    res = fake_remote.run(_INSTALL)
+    res = fake_remote.run(_install())
     assert res.returncode == 0, res.stderr
     assert "not ours" not in res.stdout
     assert not (fake_remote.base / "venv").exists()
     assert os.readlink(fake_remote.bin / "cmu") == str(fake_remote.tool_cmu)
 
 
+def test_script_keeps_a_venv_era_install_when_the_new_install_fails(fake_remote):
+    fake_remote.make_uv(fake_remote.bin / "uv")
+    old = fake_remote.base / "venv" / "bin" / "cmu"
+    old.parent.mkdir(parents=True)
+    old.write_text("#!/bin/sh\n")
+    old.chmod(0o755)
+    (fake_remote.bin / "cmu").symlink_to(old)
+    res = fake_remote.run(_install(), FAKE_UV_FAIL="1")
+    assert res.returncode != 0 and "install failed" in res.stderr
+    assert old.exists()  # the old install still works...
+    assert os.readlink(fake_remote.bin / "cmu") == str(old)  # ...and is still on PATH
+
+
 def test_script_configures_then_schedules(fake_remote):
     fake_remote.make_uv(fake_remote.bin / "uv")
-    res = fake_remote.run(_INSTALL)
+    res = fake_remote.run(_install())
     assert res.returncode == 0, res.stderr
     assert fake_remote.log("cmu.log").splitlines() == [
         "cmu config server http://10.0.0.5:8000",
@@ -525,7 +572,7 @@ def test_script_configures_then_schedules(fake_remote):
 
 def test_uninstall_script_removes_a_uv_tool_install(fake_remote):
     fake_remote.make_uv(fake_remote.bin / "uv")
-    assert fake_remote.run(_INSTALL).returncode == 0
+    assert fake_remote.run(_install()).returncode == 0
     res = fake_remote.run(remote.uninstall_script())
     assert res.returncode == 0, res.stderr
     assert "removed cmu (uv tool)" in res.stdout and "~/.claude-multi-usage" in res.stdout
@@ -548,7 +595,20 @@ def test_uninstall_script_removes_a_venv_era_install(fake_remote):
     assert not (fake_remote.bin / "cmu").is_symlink() and not (fake_remote.bin / "cmu").exists()
 
 
+def test_uninstall_script_reports_a_job_it_could_not_remove(fake_remote):
+    old = fake_remote.base / "venv" / "bin" / "cmu"
+    old.parent.mkdir(parents=True)
+    old.write_text("#!/bin/sh\nexit 1\n")  # e.g. the venv's interpreter is gone
+    old.chmod(0o755)
+    res = fake_remote.run(remote.uninstall_script())
+    assert res.returncode == 0, res.stderr
+    assert "autosync job could not be removed" in res.stderr
+    assert "systemctl --user disable --now cmu-autosync.timer" in res.stderr
+    assert "launchctl bootout" in res.stderr
+    assert "and its autosync job" not in res.stdout
+
+
 def test_uninstall_script_warns_when_nothing_is_installed(fake_remote):
     res = fake_remote.run(remote.uninstall_script())
-    assert res.returncode == 0
+    assert res.returncode == remote.NOTHING_TO_REMOVE
     assert "no cmu install found" in res.stderr

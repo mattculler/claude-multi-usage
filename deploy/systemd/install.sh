@@ -58,7 +58,8 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     echo "Kept the database in $DATA_DIR, the settings in $DEFAULTS_FILE, the '$APP_USER' user and uv."
     echo "To remove those too:"
     echo "  sudo rm -rf $DATA_DIR $DEFAULTS_FILE && sudo userdel $APP_USER"
-    echo "  sudo rm -f /usr/local/bin/uv /usr/local/bin/uvx && sudo rm -rf /root/.cache/uv   # if this script installed uv"
+    echo "  sudo rm -rf /root/.cache/uv                        # uv's download cache from the install"
+    echo "  sudo rm -f /usr/local/bin/uv /usr/local/bin/uvx    # if this script installed uv"
     exit 0
 fi
 [[ -z "${1:-}" ]] || die "unknown argument: $1 (only --uninstall is supported)"
@@ -68,7 +69,7 @@ fi
 
 # uv: the one named in $UV, the one on PATH, the usual places, or the invoking
 # user's own copy. Otherwise install it for the whole host.
-if [[ -n "${UV:-}" && ! -x "${UV}" ]]; then
+if [[ -n "${UV:-}" ]] && ! [[ -f "$UV" && -x "$UV" ]]; then
     die "UV=$UV is not an executable"
 fi
 find_uv() {
@@ -76,7 +77,7 @@ find_uv() {
     [[ -n "${SUDO_USER:-}" ]] && sudo_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
     for candidate in "${UV:-}" "$(command -v uv 2>/dev/null || true)" /usr/local/bin/uv \
                      /root/.local/bin/uv "${sudo_home:+$sudo_home/.local/bin/uv}"; do
-        if [[ -n "$candidate" && -x "$candidate" ]]; then
+        if [[ -n "$candidate" && -f "$candidate" && -x "$candidate" ]]; then
             echo "$candidate"
             return 0
         fi
@@ -110,6 +111,16 @@ echo "==> Virtualenv in $VENV (from uv.lock, Python $PYTHON)"
 export UV_PROJECT_ENVIRONMENT="$VENV"
 export UV_LINK_MODE=copy
 export UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/python"
+# uv keeps an existing venv whose interpreter satisfies the version request,
+# so one built on a Python under /root or /home (unreadable for the service
+# user) has to go first.
+if [[ -e "$VENV/bin/python" ]]; then
+    case "$(readlink -f "$VENV/bin/python")" in
+        /root/*|/home/*)
+            echo "==> Recreating $VENV: its Python, $(readlink -f "$VENV/bin/python"), is not readable by '$APP_USER'"
+            rm -rf "${VENV:?}" ;;
+    esac
+fi
 "$UV" sync --project "$REPO_ROOT" --locked --no-dev --no-editable --extra server --quiet \
     --reinstall-package claude-multi-usage --python "$PYTHON"
 [[ -x "$VENV/bin/cmu" ]] || die "installation failed: $VENV/bin/cmu not found"
@@ -118,10 +129,10 @@ export UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/python"
 chmod -R u=rwX,go=rX "$VENV"
 [[ -d "$INSTALL_DIR/python" ]] && chmod -R u=rwX,go=rX "$INSTALL_DIR/python"
 case "$(readlink -f "$VENV/bin/python")" in
-    /root/*) die "the venv uses a Python under /root, which the '$APP_USER' user cannot read; pass PYTHON=3.13 or a path outside /root" ;;
+    /root/*|/home/*) die "the venv uses $(readlink -f "$VENV/bin/python"), which the '$APP_USER' user cannot read; pass PYTHON=<version> or an interpreter path outside /root and /home" ;;
 esac
 runuser -u "$APP_USER" -- env HOME="$DATA_DIR" "$VENV/bin/cmu" --version >/dev/null \
-    || die "the '$APP_USER' user cannot run $VENV/bin/cmu; check the permissions under $INSTALL_DIR"
+    || die "the '$APP_USER' user cannot run $VENV/bin/cmu (interpreter: $(readlink -f "$VENV/bin/python")); check the permissions under $INSTALL_DIR"
 
 echo "==> Settings in $DEFAULTS_FILE"
 if [[ ! -f "$DEFAULTS_FILE" ]]; then

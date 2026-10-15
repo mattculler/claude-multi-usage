@@ -1140,10 +1140,20 @@ def remote_uninstall(host: str, ssh_options: tuple):
     try:
         lines = remote.uninstall(host, ssh_options=opts)
     except subprocess.CalledProcessError as e:
-        console.print(f"[red]ssh to {host} failed (exit {e.returncode}).[/red]")
+        if e.returncode == 255:
+            console.print(
+                f"[red]ssh to {host} failed (exit 255): "
+                "check the host name, keys and network.[/red]"
+            )
+        else:
+            console.print(
+                f"[red]Uninstall on {host} failed (exit {e.returncode}); "
+                "see the output above.[/red]"
+            )
         raise SystemExit(1) from None
     for line in lines:
-        console.print(f"[green]{line}[/green]")
+        style = "yellow" if line.startswith("no cmu") else "green"
+        console.print(f"[{style}]{line}[/{style}]")
 
 
 @main.command(context_settings=CONTEXT_SETTINGS)
@@ -1291,9 +1301,9 @@ def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: 
 
     \b
     Requires the [server] extra. deploy/systemd/install.sh installs it on
-    a VM. In a checkout: `uv run --extra server cmu server start`. For a
-    uv tool install: `uv tool install -e '.[server]'` from a checkout, or
-    add `[server]` to the git requirement.
+    a VM. In a checkout: `uv run --extra server cmu server start
+    --db-path ./server.db`. For a uv tool install: `uv tool install -e
+    '.[server]'` from a checkout, or add `[server]` to the git requirement.
 
     \b
     The API has no authentication: run it on a private network only.
@@ -1312,7 +1322,7 @@ def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: 
             click.echo(
                 "Server dependencies not installed. Install the [server] extra:\n"
                 "  VM:        deploy/systemd/install.sh\n"
-                "  checkout:  uv run --extra server cmu server start\n"
+                "  checkout:  uv run --extra server cmu server start --db-path ./server.db\n"
                 "  uv tool:   uv tool install -e '.[server]'  (or add [server] "
                 "to the git requirement)",
                 err=True,

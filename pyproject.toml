@@ -57,7 +57,7 @@ dev = [
 # Flat layout: the package directory sits next to pyproject.toml.
 [tool.uv.build-backend]
 module-root = ""
-source-include = ["tests/**"]
+source-include = ["tests/**", "deploy/systemd/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

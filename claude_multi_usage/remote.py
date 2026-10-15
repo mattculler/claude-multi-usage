@@ -33,10 +33,16 @@ from importlib import metadata
 from pathlib import Path
 from typing import Optional
 
+from .autosync import LAUNCHD_LABEL, SYSTEMD_UNIT
+
 PACKAGE_DIR = Path(__file__).resolve().parent
 REMOTE_BASE = "~/.local/share/cmu"
 UV_INSTALL_URL = "https://astral.sh/uv/install.sh"
 TOOL_NAME = "claude-multi-usage"
+# Where uv may live outside PATH on a remote: its installer, Homebrew, /usr/local.
+UV_FALLBACKS = ("$HOME/.local/bin/uv", "/opt/homebrew/bin/uv", "/usr/local/bin/uv")
+# Exit status of the uninstall script when the remote had no cmu install.
+NOTHING_TO_REMOVE = 3
 _EXCLUDE_DIRS = {
     ".git",
     ".venv",
@@ -133,9 +139,10 @@ def _find_uv() -> str:
     A non-interactive ssh shell has a minimal PATH, so the usual install
     locations are tried explicitly (uv's installer, Homebrew, /usr/local).
     """
-    return """UV=""
-for candidate in "$(command -v uv 2>/dev/null || true)" "$HOME/.local/bin/uv" \\
-        /opt/homebrew/bin/uv /usr/local/bin/uv; do
+    candidates = " ".join(f'"{c}"' for c in UV_FALLBACKS)
+    return f"""UV=""
+for candidate in "$(command -v uv 2>/dev/null || true)" \\
+        {candidates}; do
     if [ -n "$candidate" ] && [ -x "$candidate" ]; then UV="$candidate"; break; fi
 done"""
 
@@ -176,11 +183,14 @@ if [ -z "$UV" ]; then
 fi
 TOOL_BIN="$("$UV" tool dir)/{TOOL_NAME}/bin"
 TOOLS_BIN="$("$UV" tool dir --bin)"
-# The venv-based installer of earlier versions left a link to its venv: replace both.
+# The venv-based installer of earlier versions left a link to its venv. uv will not
+# overwrite a link it did not make, so take it away; put it back if the install fails.
+restore_link=""
 if [ "$(readlink "$BIN/cmu" 2>/dev/null || true)" = "$BASE/venv/bin/cmu" ]; then
     rm -f "$BIN/cmu"
+    restore_link=1
+    trap '[ -z "$restore_link" ] || ln -sfn "$BASE/venv/bin/cmu" "$BIN/cmu"' EXIT
 fi
-rm -rf "$BASE/venv"
 # Never clobber commands that are not ours: put ours next to the tool instead.
 for exe in cmu {TOOL_NAME}; do
     if [ -e "$TOOLS_BIN/$exe" ] \\
@@ -194,6 +204,8 @@ echo "==> $(hostname): installing cmu with uv $("$UV" --version | cut -d' ' -f2)
 "$UV" tool install --quiet --reinstall{python_flag} {install_from}
 CMU="$TOOL_BIN/cmu"
 [ -x "$CMU" ] || {{ echo "error: $CMU not found after install" >&2; exit 1; }}
+restore_link=""
+rm -rf "$BASE/venv"
 echo "cmu is linked in $("$UV" tool dir --bin) (make sure it is on your PATH in interactive shells)"
 echo "==> $(hostname): configuring"
 "$CMU" config server {q(server_url)}
@@ -211,29 +223,38 @@ BASE={REMOTE_BASE}
 BIN="$HOME/.local/bin"
 {_find_uv()}
 removed=""
+job_left=""
 if [ -n "$UV" ]; then
     CMU="$("$UV" tool dir)/{TOOL_NAME}/bin/cmu"
     if [ -x "$CMU" ]; then
-        "$CMU" autosync uninstall || true
+        "$CMU" autosync uninstall || job_left=1
         "$UV" tool uninstall {TOOL_NAME} >/dev/null 2>&1 || true
         removed="uv tool"
     fi
 fi
 # Installs made by the venv-based installer of earlier versions.
 if [ -x "$BASE/venv/bin/cmu" ]; then
-    "$BASE/venv/bin/cmu" autosync uninstall || true
+    "$BASE/venv/bin/cmu" autosync uninstall || job_left=1
     removed="${{removed:+$removed, }}venv"
 fi
 if [ "$(readlink "$BIN/cmu" 2>/dev/null || true)" = "$BASE/venv/bin/cmu" ]; then
     rm -f "$BIN/cmu"
 fi
 rm -rf "$BASE"
-if [ -n "$removed" ]; then
-    echo "==> $(hostname): removed cmu ($removed) and its autosync job"
-    echo "    kept: the config in ~/.claude-multi-usage and uv"
-else
+if [ -z "$removed" ]; then
     echo "warning: no cmu install found on $(hostname); nothing to remove" >&2
+    exit {NOTHING_TO_REMOVE}
 fi
+if [ -n "$job_left" ]; then
+    echo "==> $(hostname): removed cmu ($removed); its autosync job could not be removed" >&2
+    echo "    Linux: systemctl --user disable --now {SYSTEMD_UNIT}.timer;" >&2
+    echo "           rm ~/.config/systemd/user/{SYSTEMD_UNIT}.*" >&2
+    echo "    macOS: launchctl bootout gui/$(id -u)/{LAUNCHD_LABEL};" >&2
+    echo "           rm ~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist" >&2
+else
+    echo "==> $(hostname): removed cmu ($removed) and its autosync job"
+fi
+echo "    kept: the config in ~/.claude-multi-usage and uv"
 """
 
 
@@ -278,5 +299,10 @@ def install(
 
 
 def uninstall(host: str, ssh_options: Optional[list[str]] = None, run=_ssh) -> list[str]:
-    run(host, ["bash", "-s"], uninstall_script().encode(), ssh_options or [])
+    try:
+        run(host, ["bash", "-s"], uninstall_script().encode(), ssh_options or [])
+    except subprocess.CalledProcessError as e:
+        if e.returncode == NOTHING_TO_REMOVE:
+            return [f"no cmu install found on {host}; nothing removed"]
+        raise
     return [f"cmu removed from {host}"]
