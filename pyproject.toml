@@ -42,9 +42,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/hunknownn/claude-multi-usage"
-Repository = "https://github.com/hunknownn/claude-multi-usage"
-Issues = "https://github.com/hunknownn/claude-multi-usage/issues"
+Homepage = "https://github.com/mattculler/claude-multi-usage"
+Repository = "https://github.com/mattculler/claude-multi-usage"
+Issues = "https://github.com/mattculler/claude-multi-usage/issues"
 
 [project.scripts]
 cmu = "claude_multi_usage.cli:main"

@@ -223,3 +223,22 @@ def test_store_direct_roundtrip(tmp_path):
     assert store.get_device_data("missing") is None
     assert [d.hostname for d in store.list_devices()] == ["old"]
     store.close()
+
+
+def test_snapshot_payload_replaces_instead_of_merging(client):
+    client.post("/api/sync", json=payload(alias="first"))
+    snap = payload(snapshot=True, alias=None,
+                   daily_activity=[{"date": "2026-10-09", "message_count": 1, "session_count": 1, "tool_call_count": 0}],
+                   daily_model_tokens=[{"date": "2026-10-09", "tokens_by_model": {"claude-opus-4-6": 5}}],
+                   projects=[{"name": "p9", "session_count": 1, "output_tokens": 5}],
+                   total_sessions=1, total_messages=1)
+    assert client.post("/api/sync", json=snap).status_code == 200
+    d = client.get("/api/usage", params={"hostname": "box-a"}).json()[0]
+    assert [x["date"] for x in d["daily_activity"]] == ["2026-10-09"]
+    assert [p["name"] for p in d["projects"]] == ["p9"]
+    assert d["total_sessions"] == 1 and d["total_messages"] == 1
+    assert d["alias"] == "first"  # a snapshot without an alias keeps the stored one
+    # a later ordinary sync merges again
+    assert client.post("/api/sync", json=payload(snapshot=False)).status_code == 200
+    d = client.get("/api/usage", params={"hostname": "box-a"}).json()[0]
+    assert sorted(x["date"] for x in d["daily_activity"]) == ["2026-10-04", "2026-10-09"]
