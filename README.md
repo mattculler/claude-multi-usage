@@ -315,7 +315,7 @@ uv run ruff format        # format
 uv run pytest
 ```
 
-CI runs `uv sync --locked --extra server`, `uv run ruff check`, `uv run ruff format --check` and `uv run pytest`; `--locked` fails when `uv.lock` is stale, so run `uv lock` after changing dependencies and commit `uv.lock`.
+CI has a lint job (`ruff check` and `ruff format --check`) and a test job (`pytest` on 3.9, 3.11 and 3.13), both installed from the lockfile with `--locked`, which fails when `uv.lock` is stale: run `uv lock` after changing dependencies and commit `uv.lock`.
 
 Tests run against a synthetic `~/.claude` tree in a temp directory and never touch the network.
 

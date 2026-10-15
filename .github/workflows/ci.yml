@@ -6,6 +6,25 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install the dev tools (from uv.lock)
+        run: uv sync --locked --only-dev
+
+      - name: ruff check
+        run: uv run --no-sync ruff check
+
+      - name: ruff format
+        run: uv run --no-sync ruff format --check
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -24,11 +43,5 @@ jobs:
       - name: Install (from uv.lock)
         run: uv sync --locked --extra server
 
-      - name: Lint
-        run: uv run ruff check
-
-      - name: Format
-        run: uv run ruff format --check
-
       - name: Test
-        run: uv run pytest -q
+        run: uv run --no-sync pytest -q
