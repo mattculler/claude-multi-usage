@@ -72,7 +72,9 @@ def test_server_start_options(fake_home, monkeypatch):
     import types
 
     calls = []
-    monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: calls.append((a, k))))
+    monkeypatch.setitem(
+        sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: calls.append((a, k)))
+    )
     # The command writes os.environ directly; setenv (not delenv) makes
     # monkeypatch restore the original absence of these variables afterwards.
     monkeypatch.setenv("CMU_MAX_BODY_BYTES", "placeholder")
@@ -80,8 +82,21 @@ def test_server_start_options(fake_home, monkeypatch):
 
     assert CliRunner().invoke(cli.main, ["server", "start", "--max-body-bytes", "0"]).exit_code == 2
 
-    result = CliRunner().invoke(cli.main, ["server", "start", "--host", "10.0.0.5", "--port", "9000",
-                                           "--db-path", "x.db", "--max-body-bytes", "500"])
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "server",
+            "start",
+            "--host",
+            "10.0.0.5",
+            "--port",
+            "9000",
+            "--db-path",
+            "x.db",
+            "--max-body-bytes",
+            "500",
+        ],
+    )
     assert result.exit_code == 0, result.output
     assert os.environ["CMU_MAX_BODY_BYTES"] == "500"
     assert os.environ["CMU_DB_PATH"] == "x.db"
@@ -129,20 +144,36 @@ def test_diff_renders_remote_totals_without_local_cost(fake_home, monkeypatch):
     config.set_server_url("http://sync.invalid")
     config.add_key("k1")
     device = {
-        "hostname": "other-box", "alias": "office", "keys": ["k1"], "synced_at": "x",
-        "total_sessions": 42, "total_messages": 999, "first_session_date": "2026-01-01",
-        "model_usage": [{"model": "claude-opus-4-6", "input_tokens": 1, "output_tokens": 2000,
-                         "cache_read_tokens": 3, "cache_creation_tokens": 4}],
-        "daily_activity": [{"date": fake_home.yday, "message_count": 5, "session_count": 1,
-                            "tool_call_count": 0}],
-        "daily_model_tokens": [{"date": fake_home.yday, "tokens_by_model": {"claude-opus-4-6": 2000}}],
+        "hostname": "other-box",
+        "alias": "office",
+        "keys": ["k1"],
+        "synced_at": "x",
+        "total_sessions": 42,
+        "total_messages": 999,
+        "first_session_date": "2026-01-01",
+        "model_usage": [
+            {
+                "model": "claude-opus-4-6",
+                "input_tokens": 1,
+                "output_tokens": 2000,
+                "cache_read_tokens": 3,
+                "cache_creation_tokens": 4,
+            }
+        ],
+        "daily_activity": [
+            {"date": fake_home.yday, "message_count": 5, "session_count": 1, "tool_call_count": 0}
+        ],
+        "daily_model_tokens": [
+            {"date": fake_home.yday, "tokens_by_model": {"claude-opus-4-6": 2000}}
+        ],
         "projects": [{"name": "remote-proj", "session_count": 1, "output_tokens": 2000}],
         "hour_counts": {"9": 1},
         "today_hourly_date": "2020-01-01",
         "today_hourly": [{"hour": 9, "message_count": 1, "session_count": 1, "tokens": 2000}],
     }
     monkeypatch.setattr(
-        urllib.request, "urlopen",
+        urllib.request,
+        "urlopen",
         lambda req, timeout=None: _FakeResponse(json.dumps([device]).encode()),
     )
 
@@ -182,7 +213,9 @@ def test_sync_reports_http_error_details(fake_home, monkeypatch):
     assert "Sync failed: HTTP Error 422" in result.output and "field required" in result.output
 
     def plain_413(req, timeout=None):
-        raise urllib.error.HTTPError(req.full_url, 413, "Too Large", {}, io.BytesIO(b'{"detail":"too big"}'))
+        raise urllib.error.HTTPError(
+            req.full_url, 413, "Too Large", {}, io.BytesIO(b'{"detail":"too big"}')
+        )
 
     monkeypatch.setattr(urllib.request, "urlopen", plain_413)
     result = CliRunner().invoke(cli.main, ["sync"])

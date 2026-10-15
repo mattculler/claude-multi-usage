@@ -1,9 +1,11 @@
+import importlib.util
 import json
 
 import pytest
 
 pytest.importorskip("fastapi")
-pytest.importorskip("httpx")
+if not any(importlib.util.find_spec(m) for m in ("httpx2", "httpx")):
+    pytest.skip("Starlette's test client needs httpx2 or httpx", allow_module_level=True)
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -27,14 +29,18 @@ def client(tmp_path, monkeypatch):
 
 def payload(hostname="box-a", **overrides):
     base = {
-        "hostname": hostname, "synced_at": "2026-10-05T10:00:00", "keys": ["k1"],
-        "daily_activity": [{"date": "2026-10-04", "message_count": 2, "session_count": 1,
-                            "tool_call_count": 0}],
+        "hostname": hostname,
+        "synced_at": "2026-10-05T10:00:00",
+        "keys": ["k1"],
+        "daily_activity": [
+            {"date": "2026-10-04", "message_count": 2, "session_count": 1, "tool_call_count": 0}
+        ],
         "daily_model_tokens": [{"date": "2026-10-04", "tokens_by_model": {"claude-opus-4-6": 700}}],
         "projects": [{"name": "p1", "session_count": 1, "output_tokens": 700}],
         "today_hourly_date": "2026-10-05",
         "today_hourly": [{"hour": 9, "message_count": 1, "session_count": 1, "tokens": 100}],
-        "total_sessions": 3, "total_messages": 10,
+        "total_sessions": 3,
+        "total_messages": 10,
     }
     base.update(overrides)
     return base
@@ -53,7 +59,9 @@ def test_sync_then_filter_by_key_and_hostname(client):
     assert k1[0]["total_sessions"] == 3
     assert k1[0]["today_hourly_date"] == "2026-10-05"
 
-    assert [d["hostname"] for d in client.get("/api/devices", params={"key": "k2"}).json()] == ["box-b"]
+    assert [d["hostname"] for d in client.get("/api/devices", params={"key": "k2"}).json()] == [
+        "box-b"
+    ]
 
     by_host = client.get("/api/usage", params={"hostname": "box-b"}).json()
     assert len(by_host) == 1 and by_host[0]["keys"] == ["k2"]
@@ -63,8 +71,12 @@ def test_sync_then_filter_by_key_and_hostname(client):
 def test_resync_merges_history_and_keeps_alias(client):
     client.post("/api/sync", json=payload(alias="first"))
     second = payload(
-        alias=None, synced_at="2026-10-06T10:00:00", today_hourly_date="2026-10-06",
-        daily_activity=[{"date": "2026-10-06", "message_count": 1, "session_count": 1, "tool_call_count": 0}],
+        alias=None,
+        synced_at="2026-10-06T10:00:00",
+        today_hourly_date="2026-10-06",
+        daily_activity=[
+            {"date": "2026-10-06", "message_count": 1, "session_count": 1, "tool_call_count": 0}
+        ],
         daily_model_tokens=[{"date": "2026-10-06", "tokens_by_model": {"claude-opus-4-6": 50}}],
         projects=[{"name": "p2", "session_count": 1, "output_tokens": 50}],
         total_sessions=4,
@@ -81,7 +93,9 @@ def test_resync_merges_history_and_keeps_alias(client):
 
 def test_legacy_email_query_and_payload(client):
     client.post("/api/sync", json=payload("old-box", keys=[], email="me@example.com"))
-    assert [d["hostname"] for d in client.get("/api/usage", params={"email": "me@example.com"}).json()] == ["old-box"]
+    assert [
+        d["hostname"] for d in client.get("/api/usage", params={"email": "me@example.com"}).json()
+    ] == ["old-box"]
 
 
 def test_oversized_payload_is_rejected_and_not_stored(client):
@@ -109,9 +123,17 @@ def test_chunked_rejection_accumulates_across_asgi_messages(tmp_path, monkeypatc
 
     async def run(chunks):
         scope = {
-            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
-            "method": "POST", "scheme": "http", "path": "/api/sync", "raw_path": b"/api/sync",
-            "query_string": b"", "root_path": "", "server": ("test", 80), "client": ("test", 1),
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/sync",
+            "raw_path": b"/api/sync",
+            "query_string": b"",
+            "root_path": "",
+            "server": ("test", 80),
+            "client": ("test", 1),
             "headers": [(b"content-type", b"application/json"), (b"transfer-encoding", b"chunked")],
         }
         pending = list(chunks)
@@ -147,38 +169,71 @@ def test_bad_body_limit_fails_at_startup(tmp_path, monkeypatch):
     monkeypatch.setenv("CMU_DB_PATH", str(tmp_path / "server.db"))
     monkeypatch.setenv("CMU_MAX_BODY_BYTES", "abc")
     monkeypatch.setattr(app_module, "_store", None)
-    with pytest.raises(ValueError, match="CMU_MAX_BODY_BYTES"):
-        with TestClient(app_module.app):
-            pass
+    with pytest.raises(ValueError, match="CMU_MAX_BODY_BYTES"), TestClient(app_module.app):
+        pass
 
 
 def test_legacy_full_path_project_names_are_dropped(client):
     """Names uploaded by pre-fork clients (encoded local paths) do not linger."""
-    client.post("/api/sync", json=payload(projects=[
-        {"name": "-home-alice-src-secret-client-acme", "session_count": 3, "output_tokens": 700},
-        {"name": "C--Users-bob-src-proj", "session_count": 1, "output_tokens": 10},
-        {"name": "keep-me", "session_count": 1, "output_tokens": 5},
-    ]))
-    client.post("/api/sync", json=payload(projects=[
-        {"name": "secret-client-acme", "session_count": 3, "output_tokens": 700},
-    ]))
-    names = {p["name"] for p in client.get("/api/usage", params={"hostname": "box-a"}).json()[0]["projects"]}
+    client.post(
+        "/api/sync",
+        json=payload(
+            projects=[
+                {
+                    "name": "-home-alice-src-secret-client-acme",
+                    "session_count": 3,
+                    "output_tokens": 700,
+                },
+                {"name": "C--Users-bob-src-proj", "session_count": 1, "output_tokens": 10},
+                {"name": "keep-me", "session_count": 1, "output_tokens": 5},
+            ]
+        ),
+    )
+    client.post(
+        "/api/sync",
+        json=payload(
+            projects=[
+                {"name": "secret-client-acme", "session_count": 3, "output_tokens": 700},
+            ]
+        ),
+    )
+    names = {
+        p["name"]
+        for p in client.get("/api/usage", params={"hostname": "box-a"}).json()[0]["projects"]
+    }
     assert names == {"secret-client-acme", "keep-me"}
 
 
 def test_store_purges_legacy_names_on_startup(tmp_path):
     db = tmp_path / "db.sqlite"
     store = Store(db)
-    store.upsert_device(SyncPayload(hostname="old", synced_at="x", projects=[
-        {"name": "-home-alice-src-secret", "session_count": 1},
-        {"name": "fine", "session_count": 1},
-    ]))
+    store.upsert_device(
+        SyncPayload(
+            hostname="old",
+            synced_at="x",
+            projects=[
+                {"name": "-home-alice-src-secret", "session_count": 1},
+                {"name": "fine", "session_count": 1},
+            ],
+        )
+    )
     # simulate a row written by an older server (merge would already filter)
-    store._conn.execute("UPDATE devices SET data = ? WHERE hostname = ?", (json.dumps({
-        "hostname": "old", "synced_at": "x",
-        "projects": [{"name": "-home-alice-src-secret", "session_count": 1},
-                     {"name": "fine", "session_count": 1}],
-    }), "old"))
+    store._conn.execute(
+        "UPDATE devices SET data = ? WHERE hostname = ?",
+        (
+            json.dumps(
+                {
+                    "hostname": "old",
+                    "synced_at": "x",
+                    "projects": [
+                        {"name": "-home-alice-src-secret", "session_count": 1},
+                        {"name": "fine", "session_count": 1},
+                    ],
+                }
+            ),
+            "old",
+        ),
+    )
     store._conn.commit()
     store.close()
     reopened = Store(db)
@@ -197,8 +252,11 @@ def test_chunked_body_without_content_length_is_limited(tmp_path, monkeypatch):
     body = json.dumps(payload()).encode()
     with _make_client(tmp_path, monkeypatch) as c:
         monkeypatch.setenv("CMU_MAX_BODY_BYTES", "200")
-        r = c.post("/api/sync", content=iter([body[:100], body[100:]]),
-                   headers={"Content-Type": "application/json"})
+        r = c.post(
+            "/api/sync",
+            content=iter([body[:100], body[100:]]),
+            headers={"Content-Type": "application/json"},
+        )
         assert "content-length" not in {k.lower() for k in r.request.headers}
         assert r.status_code == 413
         assert r.headers["connection"] == "close"
@@ -227,11 +285,17 @@ def test_store_direct_roundtrip(tmp_path):
 
 def test_snapshot_payload_replaces_instead_of_merging(client):
     client.post("/api/sync", json=payload(alias="first"))
-    snap = payload(snapshot=True, alias=None,
-                   daily_activity=[{"date": "2026-10-09", "message_count": 1, "session_count": 1, "tool_call_count": 0}],
-                   daily_model_tokens=[{"date": "2026-10-09", "tokens_by_model": {"claude-opus-4-6": 5}}],
-                   projects=[{"name": "p9", "session_count": 1, "output_tokens": 5}],
-                   total_sessions=1, total_messages=1)
+    snap = payload(
+        snapshot=True,
+        alias=None,
+        daily_activity=[
+            {"date": "2026-10-09", "message_count": 1, "session_count": 1, "tool_call_count": 0}
+        ],
+        daily_model_tokens=[{"date": "2026-10-09", "tokens_by_model": {"claude-opus-4-6": 5}}],
+        projects=[{"name": "p9", "session_count": 1, "output_tokens": 5}],
+        total_sessions=1,
+        total_messages=1,
+    )
     assert client.post("/api/sync", json=snap).status_code == 200
     d = client.get("/api/usage", params={"hostname": "box-a"}).json()[0]
     assert [x["date"] for x in d["daily_activity"]] == ["2026-10-09"]

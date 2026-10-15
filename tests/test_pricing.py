@@ -25,10 +25,13 @@ def test_tiered_cost():
     assert _tiered_cost(0, 1.0) == 0.0
 
 
-@pytest.mark.parametrize("usd,expected", [
-    (1234.5, "$1,234.50"),
-    (0.5, "$0.50"),
-    (0.001234, "$0.0012"),
-])
+@pytest.mark.parametrize(
+    "usd,expected",
+    [
+        (1234.5, "$1,234.50"),
+        (0.5, "$0.50"),
+        (0.001234, "$0.0012"),
+    ],
+)
 def test_format_cost(usd, expected):
     assert format_cost(usd) == expected

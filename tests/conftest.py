@@ -18,10 +18,14 @@ from claude_multi_usage import cli, config, cost_cache, dashboard, index, parser
 MODEL = "claude-sonnet-4-5-20250929"
 PRICING = {
     MODEL: {
-        "input": 3e-6, "output": 15e-6,
-        "cache_read": 0.3e-6, "cache_creation": 3.75e-6,
-        "input_above_200k": None, "output_above_200k": None,
-        "cache_read_above_200k": None, "cache_creation_above_200k": None,
+        "input": 3e-6,
+        "output": 15e-6,
+        "cache_read": 0.3e-6,
+        "cache_creation": 3.75e-6,
+        "input_above_200k": None,
+        "output_above_200k": None,
+        "cache_read_above_200k": None,
+        "cache_creation_above_200k": None,
     }
 }
 
@@ -39,11 +43,16 @@ YDAY_COST = 0.01053
 
 def _asst(mid, inp, out, cache_read, cache_create, ts, block):
     return {
-        "type": "assistant", "timestamp": ts,
+        "type": "assistant",
+        "timestamp": ts,
         "message": {
-            "id": mid, "model": MODEL, "role": "assistant", "content": [block],
+            "id": mid,
+            "model": MODEL,
+            "role": "assistant",
+            "content": [block],
             "usage": {
-                "input_tokens": inp, "output_tokens": out,
+                "input_tokens": inp,
+                "output_tokens": out,
                 "cache_read_input_tokens": cache_read,
                 "cache_creation_input_tokens": cache_create,
             },
@@ -99,12 +108,28 @@ def fake_home(tmp_path, monkeypatch):
     session_a = [
         {"type": "user", "timestamp": t, "message": {"role": "user", "content": "hi"}},
         _asst("m1", 100, 1000, 5000, 2000, t, {"type": "text", "text": "a"}),
-        _asst("m1", 100, 1000, 5000, 2000, t, {"type": "tool_use", "id": "t1", "name": "Read", "input": {}}),
+        _asst(
+            "m1",
+            100,
+            1000,
+            5000,
+            2000,
+            t,
+            {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},
+        ),
         _asst("m1", 100, 1000, 5000, 2000, t, {"type": "text", "text": "b"}),
-        {"type": "user", "timestamp": t,
-         "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "x"}]}},
+        {
+            "type": "user",
+            "timestamp": t,
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "x"}],
+            },
+        },
         _asst("m2", 50, 500, 6000, 0, t, {"type": "text", "text": "c"}),
-        _asst("m2", 50, 500, 6000, 0, t, {"type": "tool_use", "id": "t2", "name": "Bash", "input": {}}),
+        _asst(
+            "m2", 50, 500, 6000, 0, t, {"type": "tool_use", "id": "t2", "name": "Bash", "input": {}}
+        ),
     ]
     ty = _utc_ts(yday_noon)
     session_b = [
@@ -129,21 +154,39 @@ def fake_home(tmp_path, monkeypatch):
     mtime = yday_noon.timestamp()
     os.utime(file_b, (mtime, mtime))
 
-    (claude_dir / "stats-cache.json").write_text(json.dumps({
-        "dailyActivity": [{"date": yday, "messageCount": 2, "sessionCount": 1, "toolCallCount": 0}],
-        "dailyModelTokens": [{"date": yday, "tokensByModel": {MODEL: YDAY_OUTPUT_TOKENS}}],
-        "modelUsage": {MODEL: {"inputTokens": 10, "outputTokens": YDAY_OUTPUT_TOKENS,
-                               "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}},
-        "hourCounts": {"10": 1},
-        "totalSessions": 1,
-        "totalMessages": 2,
-        "firstSessionDate": yday + "T10:00:00.000Z",
-    }))
+    (claude_dir / "stats-cache.json").write_text(
+        json.dumps(
+            {
+                "dailyActivity": [
+                    {"date": yday, "messageCount": 2, "sessionCount": 1, "toolCallCount": 0}
+                ],
+                "dailyModelTokens": [{"date": yday, "tokensByModel": {MODEL: YDAY_OUTPUT_TOKENS}}],
+                "modelUsage": {
+                    MODEL: {
+                        "inputTokens": 10,
+                        "outputTokens": YDAY_OUTPUT_TOKENS,
+                        "cacheReadInputTokens": 0,
+                        "cacheCreationInputTokens": 0,
+                    }
+                },
+                "hourCounts": {"10": 1},
+                "totalSessions": 1,
+                "totalMessages": 2,
+                "firstSessionDate": yday + "T10:00:00.000Z",
+            }
+        )
+    )
 
     yield SimpleNamespace(
-        home=tmp_path, projects=projects, today=today, yday=yday, model=MODEL,
-        today_output_tokens=TODAY_OUTPUT_TOKENS, today_cost=TODAY_COST,
-        yday_output_tokens=YDAY_OUTPUT_TOKENS, yday_cost=YDAY_COST,
+        home=tmp_path,
+        projects=projects,
+        today=today,
+        yday=yday,
+        model=MODEL,
+        today_output_tokens=TODAY_OUTPUT_TOKENS,
+        today_cost=TODAY_COST,
+        yday_output_tokens=YDAY_OUTPUT_TOKENS,
+        yday_cost=YDAY_COST,
     )
     if index._instance is not None:
         index._instance.close()

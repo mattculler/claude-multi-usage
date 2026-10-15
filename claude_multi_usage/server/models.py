@@ -49,6 +49,7 @@ class DeviceHourlyUsage(BaseModel):
 
 class SyncPayload(BaseModel):
     """Data pushed from a device to the server."""
+
     hostname: str
     synced_at: str
     alias: Optional[str] = None

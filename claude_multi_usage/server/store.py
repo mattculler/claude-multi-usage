@@ -8,11 +8,11 @@ import sqlite3
 from pathlib import Path
 
 from .models import (
-    SyncPayload,
-    DeviceInfo,
     DeviceActivity,
+    DeviceInfo,
     DeviceModelTokens,
     DeviceProject,
+    SyncPayload,
 )
 
 DEFAULT_DB_PATH = Path("/data") / "server.db"
@@ -100,8 +100,7 @@ class Store:
                DO UPDATE SET last_synced = excluded.last_synced,
                              data = excluded.data,
                              alias = excluded.alias""",
-            (payload.hostname, payload.synced_at,
-             payload.model_dump_json(), payload.alias),
+            (payload.hostname, payload.synced_at, payload.model_dump_json(), payload.alias),
         )
         # Update device_keys
         if payload.keys:
@@ -137,14 +136,16 @@ class Store:
                 (row["hostname"],),
             ).fetchall()
             keys = [kr["key"] for kr in key_rows]
-            devices.append(DeviceInfo(
-                hostname=row["hostname"],
-                alias=row["alias"],
-                keys=keys,
-                last_synced=row["last_synced"],
-                total_sessions=data.get("total_sessions", 0),
-                total_messages=data.get("total_messages", 0),
-            ))
+            devices.append(
+                DeviceInfo(
+                    hostname=row["hostname"],
+                    alias=row["alias"],
+                    keys=keys,
+                    last_synced=row["last_synced"],
+                    total_sessions=data.get("total_sessions", 0),
+                    total_messages=data.get("total_messages", 0),
+                )
+            )
         return devices
 
     def get_device_data(self, hostname: str) -> SyncPayload | None:
@@ -172,9 +173,7 @@ class Store:
                 (key,),
             ).fetchall()
         else:
-            rows = self._conn.execute(
-                "SELECT data, hostname, alias FROM devices"
-            ).fetchall()
+            rows = self._conn.execute("SELECT data, hostname, alias FROM devices").fetchall()
         results = []
         for row in rows:
             payload = SyncPayload.model_validate_json(row["data"])
@@ -195,6 +194,7 @@ class Store:
 # Private merge helpers
 # ---------------------------------------------------------------------------
 
+
 def _merge_payloads(old: SyncPayload, new: SyncPayload) -> SyncPayload:
     """Merge *new* payload into *old*, preserving historical data."""
     merged_keys = list(set(old.keys + new.keys))
@@ -207,7 +207,8 @@ def _merge_payloads(old: SyncPayload, new: SyncPayload) -> SyncPayload:
         daily_model_tokens=_merge_daily_model_tokens(
             old.daily_model_tokens, new.daily_model_tokens
         ),
-        # Cumulative data: use the new payload's values if present, else keep existing (backward compat)
+        # Cumulative data: the new payload's values if present, else the existing
+        # ones (backward compat)
         model_usage=new.model_usage or old.model_usage,
         projects=_merge_projects(old.projects, new.projects),
         hour_counts=new.hour_counts or old.hour_counts,
@@ -237,16 +238,13 @@ def _merge_daily_model_tokens(
     return sorted(by_date.values(), key=lambda t: t.date)
 
 
-
 def _is_encoded_path_name(name: str) -> bool:
     """True for names older clients derived from the encoded working directory
     ('-home-me-src-repo', or 'C--Users-me-repo' on Windows)."""
     return name.startswith("-") or re.match(r"^[A-Za-z]--", name) is not None
 
 
-def _merge_projects(
-    old: list[DeviceProject], new: list[DeviceProject]
-) -> list[DeviceProject]:
+def _merge_projects(old: list[DeviceProject], new: list[DeviceProject]) -> list[DeviceProject]:
     by_name: dict[str, DeviceProject] = {
         p.name: p for p in old if not _is_encoded_path_name(p.name)
     }
@@ -264,7 +262,6 @@ def _merge_projects(
         else:
             by_name[p.name] = p
     return list(by_name.values())
-
 
 
 def _earlier_date(a: str | None, b: str | None) -> str | None:

@@ -6,19 +6,14 @@ Parses local `~/.claude` data and displays usage stats in your terminal — sess
 
 ## Install
 
-This fork is installed from the repository. The upstream package on PyPI and Homebrew (`pipx install claude-multi-usage`, `brew install hunknownn/tap/claude-multi-usage`) is upstream's release line and does not contain this fork's fixes (token deduplication, repository-name projects, the server's size limit).
+This fork is installed from the repository with [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`); no system Python, pip or venv package is needed, uv downloads a Python if there is none. The upstream package on PyPI and Homebrew (`pipx install claude-multi-usage`, `brew install hunknownn/tap/claude-multi-usage`) is upstream's release line and does not contain this fork's fixes (token deduplication, repository-name projects, the server's size limit).
 
-**pipx**
 ```bash
-pipx install "git+https://github.com/mattculler/claude-multi-usage.git"
+uv tool install "git+https://github.com/mattculler/claude-multi-usage.git"
+uv tool upgrade claude-multi-usage          # later, to pick up new commits
 ```
 
-**pip, from a checkout**
-```bash
-git clone https://github.com/mattculler/claude-multi-usage.git
-cd claude-multi-usage
-pip install .            # or: pip install ".[server]" to include the sync server
-```
+From a checkout, `uv tool install -e .` installs it editable: `git pull` is then enough to update, and `cmu remote install` sends the checkout itself to other machines.
 
 ## Usage
 
@@ -62,7 +57,7 @@ For very old session logs that recorded no working directory, the name is guesse
 
 **Run directly on a VM (systemd)**
 
-On a Linux host with systemd and Python 3.9+ (on Debian/Ubuntu also `apt install python3-venv`), from a checkout of this repository:
+On a Linux host with systemd and `curl`, from a checkout of this repository:
 
 ```bash
 git clone https://github.com/mattculler/claude-multi-usage.git
@@ -70,7 +65,7 @@ cd claude-multi-usage
 sudo deploy/systemd/install.sh
 ```
 
-The script creates a `cmu` system user, installs the package into `/opt/cmu/venv`, keeps the database in `/var/lib/cmu/server.db`, and enables `cmu-server.service` on port 8000, then waits for `/api/health` to answer. Settings (bind address, port, database path, request size limit) live in `/etc/default/cmu-server`; restart the service after editing. A different database directory must exist and be writable by the `cmu` user. To upgrade, `git pull` and re-run the script. To remove it, `sudo deploy/systemd/install.sh --uninstall`.
+The script installs uv into `/usr/local/bin` if the host has none, creates a `cmu` system user, builds `/opt/cmu/venv` from `uv.lock` on the host's Python 3.13 (or one uv downloads into `/opt/cmu/python`; `sudo PYTHON=3.12 deploy/systemd/install.sh` picks another, since sudo resets the environment the variable goes after `sudo`), keeps the database in `/var/lib/cmu/server.db`, and enables `cmu-server.service` on port 8000, then waits for `/api/health` to answer. Settings (bind address, port, database path, request size limit) live in `/etc/default/cmu-server`; restart the service after editing. A different database directory must exist and be writable by the `cmu` user. To upgrade, `git pull` and re-run the script. To remove it, `sudo deploy/systemd/install.sh --uninstall`.
 
 ```bash
 systemctl status cmu-server
@@ -107,16 +102,16 @@ The Service is `ClusterIP`, reachable inside the cluster only. `deploy/k8s/ingre
 </details>
 
 <details>
-<summary>pip, in the foreground</summary>
+<summary>uv, in the foreground</summary>
 
 From a checkout of this repository:
 
 ```bash
-pip install ".[server]"
-cmu server start --host 0.0.0.0 --port 8000 --db-path ./server.db
+uv run --extra server cmu server start --db-path ./server.db
+uv run --extra server cmu server start --host 0.0.0.0 --port 8000 --db-path ./server.db
 ```
 
-Options: `--host`, `--port`, `--db-path PATH` (default `/data/server.db`), `--max-body-bytes N` (reject sync payloads larger than N bytes; default 2 MB). The same settings can be given as `CMU_DB_PATH` and `CMU_MAX_BODY_BYTES` environment variables.
+Options: `--host`, `--port`, `--db-path PATH` (default `/data/server.db`, the Docker image's volume), `--max-body-bytes N` (reject sync payloads larger than N bytes; default 2 MB). The same settings can be given as `CMU_DB_PATH` and `CMU_MAX_BODY_BYTES` environment variables.
 </details>
 
 ### Client Setup
@@ -172,7 +167,7 @@ cmu remote install laptop --from git+https://github.com/mattculler/claude-multi-
 cmu remote uninstall laptop
 ```
 
-The remote gets a virtualenv in `~/.local/share/cmu`, a `~/.local/bin/cmu` link, this machine's server URL and keys (override with `--server` and `--key`), and `cmu autosync install` (add `--linger` for a Linux remote that should sync while nobody is logged in). When run from a source checkout, the checkout's git-tracked files are sent over; otherwise the repository URL is installed with pip, which needs `git` and GitHub access on the remote. The remote needs `bash` and Python 3.9+ with `venv` (Debian/Ubuntu: `python3-venv`; macOS: the Xcode command-line tools) and must be able to reach PyPI for the dependencies. On a Mac that nobody is logged in to, the launchd agent is installed but only starts at the next login. Make sure the server URL is one the remote can reach (not `localhost`).
+The remote gets uv (installed into `~/.local/bin` by the official installer if the host has none; shell profiles are left alone, so that directory must be on the PATH there), cmu as a uv tool with a `~/.local/bin/cmu` command, this machine's server URL and keys (override with `--server` and `--key`), and `cmu autosync install` (add `--linger` for a Linux remote that should sync while nobody is logged in). When run from a source checkout, the checkout's git-tracked files are sent over and kept in `~/.local/share/cmu/src`; otherwise the repository URL is installed, which needs `git` and GitHub access on the remote. The remote needs `bash`, `curl` or `wget`, and access to PyPI for the dependencies; uv downloads a Python if the host has none that is 3.9 or newer (pick one with `--python 3.12`). Re-running the command upgrades an existing install, including one made by the earlier venv-based version of this command. On a Mac that nobody is logged in to, the launchd agent is installed but only starts at the next login. Make sure the server URL is one the remote can reach (not `localhost`).
 
 ### claude.ai chats (web, desktop, Android, iOS)
 
@@ -314,10 +309,13 @@ No API keys required. Local data stays local unless you opt in to sync; the only
 ## Development
 
 ```bash
-pip install -e ".[server,dev]"
-ruff check --select F claude_multi_usage tests
-pytest
+uv sync --extra server    # .venv with the package (editable), the server and the dev tools
+uv run ruff check         # lint (rules in pyproject.toml)
+uv run ruff format        # format
+uv run pytest
 ```
+
+CI has a lint job (`ruff check` and `ruff format --check`) and a test job (`pytest` on 3.9, 3.11 and 3.13), both installed from the lockfile with `--locked`, which fails when `uv.lock` is stale: run `uv lock` after changing dependencies and commit `uv.lock`.
 
 Tests run against a synthetic `~/.claude` tree in a temp directory and never touch the network.
 

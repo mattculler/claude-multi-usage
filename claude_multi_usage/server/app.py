@@ -10,7 +10,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 
-from .models import SyncPayload, DeviceInfo
+from .models import DeviceInfo, SyncPayload
 from .store import Store
 
 _store: Store | None = None
@@ -36,7 +36,7 @@ def get_max_body_bytes() -> int:
     try:
         value = int(raw)
     except ValueError:
-        raise ValueError(f"CMU_MAX_BODY_BYTES must be an integer, got {raw!r}")
+        raise ValueError(f"CMU_MAX_BODY_BYTES must be an integer, got {raw!r}") from None
     if value <= 0:
         raise ValueError("CMU_MAX_BODY_BYTES must be positive")
     return value
@@ -100,14 +100,18 @@ class BodySizeLimitMiddleware:
     @staticmethod
     async def _reject(send, detail: str):
         body = json.dumps({"detail": detail}).encode()
-        await send({
-            "type": "http.response.start",
-            "status": 413,
-            "headers": _with_connection_close([
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ]),
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": _with_connection_close(
+                    [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(body)).encode()),
+                    ]
+                ),
+            }
+        )
         await send({"type": "http.response.body", "body": body})
 
 
