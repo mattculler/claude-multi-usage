@@ -1,4 +1,5 @@
 import hashlib
+import importlib.util
 import json
 import urllib.request
 import zipfile
@@ -404,7 +405,8 @@ def test_cli_imports_as_claude_ai_device(fake_home, export_zip, monkeypatch):
 
 def test_reimport_replaces_the_device_on_the_server(export_zip, tmp_path, monkeypatch):
     pytest.importorskip("fastapi")
-    pytest.importorskip("httpx")
+    if not any(importlib.util.find_spec(m) for m in ("httpx2", "httpx")):
+        pytest.skip("Starlette's test client needs httpx2 or httpx")
     from fastapi.testclient import TestClient
 
     from claude_multi_usage.server import app as app_module

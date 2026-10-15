@@ -1,9 +1,11 @@
+import importlib.util
 import json
 
 import pytest
 
 pytest.importorskip("fastapi")
-pytest.importorskip("httpx")
+if not any(importlib.util.find_spec(m) for m in ("httpx2", "httpx")):
+    pytest.skip("Starlette's test client needs httpx2 or httpx", allow_module_level=True)
 
 from fastapi.testclient import TestClient  # noqa: E402
 
