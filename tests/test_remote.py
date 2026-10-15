@@ -83,26 +83,27 @@ def test_make_tarball_sends_only_source_files(tmp_path, git):
 
 def test_install_script_is_valid_bash_and_configures_everything():
     script = remote.install_script(True, None, "http://10.0.0.5:8000", [("k1", "team key"), ("k2", "")],
-                                   alias="office box", every_minutes=7, python="python3.12", linger=True)
+                                   alias="office box", every_minutes=7, python="3.12", linger=True)
     assert _bash_syntax_ok(script)
-    assert "PY=python3.12" in script
-    assert 'pip install --quiet --upgrade "$BASE/src"' in script
+    assert "curl -LsSf https://astral.sh/uv/install.sh | sh" in script  # uv installed only if missing
+    assert 'tool install --quiet --reinstall --python 3.12 "$BASE/src"' in script
     assert 'rm -rf "$BASE/src"' in script
-    assert '"$VENV/bin/cmu" config server http://10.0.0.5:8000' in script
+    assert '"$CMU" config server http://10.0.0.5:8000' in script
     assert "config key add k1 'team key'" in script
     assert "config key add k2 ''" in script
     assert "config alias 'office box'" in script
     assert "autosync install --every 7 --linger" in script
     assert "autosync run --force" not in script  # install already performs the first sync
-    assert 'readlink "$LINK"' in script  # never clobber someone else's ~/.local/bin/cmu
-    assert "sys.version_info >= (3, 9)" in script
+    assert 'UV_TOOL_BIN_DIR="$BASE/bin"' in script  # never clobber someone else's ~/.local/bin/cmu
+    assert "pip install" not in script and "venv" not in script
 
     req = remote.install_script(False, "git+https://github.com/x/y.git", "http://s", [("k", "")], None, 15)
     assert _bash_syntax_ok(req)
-    assert "pip install --quiet --upgrade git+https://github.com/x/y.git" in req
-    assert "config alias" not in req and "--linger" not in req
+    assert "tool install --quiet --reinstall git+https://github.com/x/y.git" in req
+    assert "--python" not in req and "config alias" not in req and "--linger" not in req
     assert _bash_syntax_ok(remote.uninstall_script())
-    assert 'readlink "$LINK"' in remote.uninstall_script()
+    assert "tool uninstall claude-multi-usage" in remote.uninstall_script()
+    assert "autosync uninstall" in remote.uninstall_script()
 
 
 def test_install_streams_checkout_then_runs_script(tmp_path):
@@ -151,7 +152,7 @@ def test_cli_remote_install_uses_local_config_by_default(fake_home, monkeypatch)
     config.add_key("k1", "team")
     seen = {}
 
-    def fake_install(host, server_url, keys, every, alias=None, source=None, python="python3",
+    def fake_install(host, server_url, keys, every, alias=None, source=None, python=None,
                      ssh_options=None, linger=False):
         seen.update(host=host, server_url=server_url, keys=keys, every=every, alias=alias,
                     source=source, python=python, ssh_options=ssh_options, linger=linger)
@@ -162,7 +163,7 @@ def test_cli_remote_install_uses_local_config_by_default(fake_home, monkeypatch)
                                       "--ssh-option", "-o StrictHostKeyChecking=accept-new", "--linger"])
     assert r.exit_code == 0, r.output
     assert seen == {"host": "box", "server_url": "http://sync.invalid", "keys": [("k1", "team")],
-                    "every": 5, "alias": "lap", "source": None, "python": "python3",
+                    "every": 5, "alias": "lap", "source": None, "python": None,
                     "ssh_options": ["-o", "StrictHostKeyChecking=accept-new"], "linger": True}
     assert "done" in r.output and "Warning" not in r.output
 
@@ -173,11 +174,11 @@ def test_cli_remote_install_overrides_and_localhost_warning(fake_home, monkeypat
         server_url=server_url, keys=keys, **kw) or [])
     r = CliRunner().invoke(cli.main, ["remote", "install", "box", "--server", "http://localhost:8000",
                                       "--key", "a", "--key", "b", "--from", "git+https://g/r.git",
-                                      "--python", "python3.11"])
+                                      "--python", "3.11"])
     assert r.exit_code == 0, r.output
     assert "Warning" in r.output and "points at this machine" in r.output
     assert seen["server_url"] == "http://localhost:8000" and seen["keys"] == [("a", ""), ("b", "")]
-    assert seen["source"] == "git+https://g/r.git" and seen["python"] == "python3.11"
+    assert seen["source"] == "git+https://g/r.git" and seen["python"] == "3.11"
 
 
 def test_cli_remote_install_requires_config(fake_home):

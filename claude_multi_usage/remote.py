@@ -2,18 +2,21 @@
 
 ``cmu remote install user@host`` runs, on the remote machine:
 
-1. a check for Python 3.9+ with venv and ensurepip
-2. a virtualenv in ``~/.local/share/cmu/venv`` with cmu installed into it,
-   either from this checkout (its git-tracked files, streamed over as a
-   tarball) or from a pip requirement such as a ``git+https://...`` URL
-3. a ``~/.local/bin/cmu`` symlink (left alone if something else is there)
+1. `uv <https://docs.astral.sh/uv/>`_, installed into ``~/.local/bin`` with
+   the official installer if the host has none
+2. ``uv tool install`` of cmu, either from this checkout (its git-tracked
+   files, streamed over as a tarball) or from a requirement such as a
+   ``git+https://...`` URL; uv downloads a Python if the host has none that
+   is 3.9 or newer
+3. a ``~/.local/bin/cmu`` command (if something else is already there, the
+   commands go to ``~/.local/share/cmu/bin`` instead)
 4. ``cmu config server/key/alias`` with this machine's settings unless
    overridden
 5. ``cmu autosync install``, which also performs the first sync
 
-Everything goes through the user's own ``ssh`` and needs ``bash`` on the
-remote; nothing but the source code, the server URL and the sync keys
-leaves this machine.
+Everything goes through the user's own ``ssh`` and needs ``bash`` and
+``curl`` or ``wget`` on the remote; nothing but the source code, the server
+URL and the sync keys leaves this machine.
 """
 
 from __future__ import annotations
@@ -29,6 +32,8 @@ from typing import Optional
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 REMOTE_BASE = "~/.local/share/cmu"
+UV_INSTALL_URL = "https://astral.sh/uv/install.sh"
+TOOL_NAME = "claude-multi-usage"
 _EXCLUDE_DIRS = {".git", ".venv", "venv", "build", "dist", "__pycache__", ".pytest_cache",
                  ".ruff_cache", ".claude"}
 _EXCLUDE_SUFFIXES = (".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3", ".egg-info", ".pyc",
@@ -41,7 +46,7 @@ def default_source() -> str:
 
     A source checkout (pyproject.toml next to the package) is sent as a
     tarball so the remote gets exactly this code. Otherwise the repository
-    URL from the package metadata is used as a pip requirement.
+    URL from the package metadata is used as the requirement for uv.
     """
     checkout = PACKAGE_DIR.parent
     if (checkout / "pyproject.toml").exists():
@@ -97,59 +102,81 @@ def make_tarball(checkout: Path) -> bytes:
     return buf.getvalue()
 
 
+def _find_uv() -> str:
+    """Shell lines that set ``UV`` to a usable uv binary or leave it empty.
+
+    A non-interactive ssh shell has a minimal PATH, so the usual install
+    locations are tried explicitly (uv's installer, Homebrew, /usr/local).
+    """
+    return """UV=""
+for candidate in "$(command -v uv 2>/dev/null || true)" "$HOME/.local/bin/uv" /opt/homebrew/bin/uv /usr/local/bin/uv; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then UV="$candidate"; break; fi
+done"""
+
+
 def install_script(source_is_tarball: bool, requirement: Optional[str], server_url: str,
                    keys: list[tuple[str, str]], alias: Optional[str], every_minutes: int,
-                   python: str = "python3", linger: bool = False) -> str:
+                   python: Optional[str] = None, linger: bool = False) -> str:
     """The bash script executed on the remote host."""
     q = shlex.quote
     install_from = '"$BASE/src"' if source_is_tarball else q(requirement or "")
+    python_flag = f" --python {q(python)}" if python else ""
     key_lines = "\n".join(
-        f'"$VENV/bin/cmu" config key add {q(k)} {q(desc)}' for k, desc in keys
+        f'"$CMU" config key add {q(k)} {q(desc)}' for k, desc in keys
     )
-    alias_line = f'"$VENV/bin/cmu" config alias {q(alias)}' if alias else ""
+    alias_line = f'"$CMU" config alias {q(alias)}' if alias else ""
     linger_flag = " --linger" if linger else ""
     return f"""set -euo pipefail
-PY={q(python)}
-command -v "$PY" >/dev/null 2>&1 || {{ echo "error: $PY not found on $(hostname)" >&2; exit 1; }}
-"$PY" -c 'import sys, venv, ensurepip; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null \\
-    || {{ echo "error: $PY must be Python 3.9+ with venv and ensurepip (Debian/Ubuntu: apt install python3-venv; macOS: xcode-select --install)" >&2; exit 1; }}
 BASE={REMOTE_BASE}
-VENV="$BASE/venv"
-LINK="$HOME/.local/bin/cmu"
-mkdir -p "$BASE" "$HOME/.local/bin"
-echo "==> $(hostname): virtualenv in $VENV"
-if [ ! -x "$VENV/bin/python" ] || ! "$VENV/bin/python" -m pip --version >/dev/null 2>&1; then
-    rm -rf "$VENV"
-    "$PY" -m venv "$VENV"
+BIN="$HOME/.local/bin"
+mkdir -p "$BASE" "$BIN"
+{_find_uv()}
+if [ -z "$UV" ]; then
+    echo "==> $(hostname): installing uv into $BIN ({UV_INSTALL_URL})"
+    if command -v curl >/dev/null 2>&1; then
+        curl -LsSf {UV_INSTALL_URL} | sh
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- {UV_INSTALL_URL} | sh
+    else
+        echo "error: curl or wget is needed on $(hostname) to download uv" >&2; exit 1
+    fi
+    UV="$BIN/uv"
+    [ -x "$UV" ] || {{ echo "error: uv installation failed: $UV not found" >&2; exit 1; }}
 fi
-"$VENV/bin/python" -m pip install --quiet --upgrade pip
-echo "==> $(hostname): installing cmu"
-"$VENV/bin/python" -m pip install --quiet --upgrade {install_from}
+TOOL_BIN="$("$UV" tool dir)/{TOOL_NAME}/bin"
+# Never clobber a cmu that is not ours: put the commands next to the tool instead.
+if [ -e "$BIN/cmu" ] && [ "$(readlink "$BIN/cmu" 2>/dev/null || true)" != "$TOOL_BIN/cmu" ]; then
+    export UV_TOOL_BIN_DIR="$BASE/bin"
+    echo "note: $BIN/cmu already exists and is not ours; the cmu command goes to $BASE/bin instead"
+fi
+echo "==> $(hostname): installing cmu with uv $("$UV" --version | cut -d' ' -f2)"
+"$UV" tool install --quiet --reinstall{python_flag} {install_from}
 rm -rf "$BASE/src"
-if [ ! -e "$LINK" ] || [ "$(readlink "$LINK" 2>/dev/null || true)" = "$VENV/bin/cmu" ]; then
-    ln -sfn "$VENV/bin/cmu" "$LINK"
-else
-    echo "note: $LINK already exists and is not ours; left untouched (cmu is at $VENV/bin/cmu)"
-fi
-echo "cmu is linked at $LINK (make sure $HOME/.local/bin is on your PATH in interactive shells)"
+CMU="$TOOL_BIN/cmu"
+[ -x "$CMU" ] || {{ echo "error: $CMU not found after install" >&2; exit 1; }}
+echo "cmu is linked in $("$UV" tool dir --bin) (make sure it is on your PATH in interactive shells)"
 echo "==> $(hostname): configuring"
-"$VENV/bin/cmu" config server {q(server_url)}
+"$CMU" config server {q(server_url)}
 {key_lines}
 {alias_line}
 echo "==> $(hostname): scheduling autosync every {every_minutes} min (includes the first sync)"
-"$VENV/bin/cmu" autosync install --every {every_minutes}{linger_flag}
-"$VENV/bin/cmu" autosync status
+"$CMU" autosync install --every {every_minutes}{linger_flag}
+"$CMU" autosync status
 """
 
 
 def uninstall_script() -> str:
     return f"""set -uo pipefail
 BASE={REMOTE_BASE}
-LINK="$HOME/.local/bin/cmu"
-if [ -x "$BASE/venv/bin/cmu" ]; then "$BASE/venv/bin/cmu" autosync uninstall || true; fi
-if [ "$(readlink "$LINK" 2>/dev/null || true)" = "$BASE/venv/bin/cmu" ]; then rm -f "$LINK"; fi
+{_find_uv()}
+if [ -n "$UV" ]; then
+    CMU="$("$UV" tool dir)/{TOOL_NAME}/bin/cmu"
+    if [ -x "$CMU" ]; then "$CMU" autosync uninstall || true; fi
+    "$UV" tool uninstall {TOOL_NAME} >/dev/null 2>&1 || true
+    UV_TOOL_BIN_DIR="$BASE/bin" "$UV" tool uninstall {TOOL_NAME} >/dev/null 2>&1 || true
+fi
 rm -rf "$BASE"
-echo "==> $(hostname): removed cmu and its autosync job (config in ~/.claude-multi-usage kept)"
+echo "==> $(hostname): removed cmu and its autosync job (config in ~/.claude-multi-usage and uv kept)"
 """
 
 
@@ -159,8 +186,9 @@ def _ssh(host: str, args: list[str], input_bytes: bytes, ssh_options: list[str])
 
 
 def install(host: str, server_url: str, keys: list[tuple[str, str]], every_minutes: int,
-            alias: Optional[str] = None, source: Optional[str] = None, python: str = "python3",
-            ssh_options: Optional[list[str]] = None, linger: bool = False, run=_ssh) -> list[str]:
+            alias: Optional[str] = None, source: Optional[str] = None,
+            python: Optional[str] = None, ssh_options: Optional[list[str]] = None,
+            linger: bool = False, run=_ssh) -> list[str]:
     """Install cmu on ``host``. Returns lines describing what was done."""
     ssh_options = ssh_options or []
     source = source or default_source()

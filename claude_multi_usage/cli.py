@@ -891,9 +891,10 @@ def remote_group():
       cmu remote uninstall laptop
 
     \b
-    The remote gets a virtualenv in ~/.local/share/cmu, a ~/.local/bin/cmu
-    link, this machine's server URL and keys, and `cmu autosync install`.
-    Needs Python 3.9+ with venv there (Debian/Ubuntu: python3-venv).
+    The remote gets uv (installed into ~/.local/bin if missing), cmu as a
+    uv tool with a ~/.local/bin/cmu command, this machine's server URL and
+    keys, and `cmu autosync install`. Needs bash and curl or wget there;
+    uv downloads a Python if the host has none that is 3.9 or newer.
     """
 
 
@@ -907,9 +908,11 @@ def remote_group():
               help="Sync key, repeatable (default: this machine's keys).")
 @click.option("--alias", default=None, help="Display alias for the remote machine.")
 @click.option("--from", "source", default=None, metavar="PATH|REQUIREMENT",
-              help="Install cmu from a source checkout (sent over ssh) or a pip requirement such as "
+              help="Install cmu from a source checkout (sent over ssh) or a requirement such as "
                    "git+https://... (default: this checkout when run from one, else the repository URL).")
-@click.option("--python", default="python3", show_default=True, help="Python interpreter on the remote host.")
+@click.option("--python", default=None, metavar="VERSION|PATH",
+              help="Python for uv to use on the remote, e.g. 3.12 (default: uv's choice, "
+                   "downloaded if needed).")
 @click.option("--ssh-option", "ssh_options", multiple=True, metavar="OPT",
               help='Extra ssh option, repeatable, e.g. "-o StrictHostKeyChecking=accept-new".')
 @click.option("--linger", is_flag=True,
@@ -1093,7 +1096,8 @@ def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: 
     """Start the sync collection server.
 
     \b
-    Requires server extras: pip install claude-multi-usage[server]
+    Requires the [server] extra: deploy/systemd/install.sh installs it,
+    or `uv sync --extra server` in a checkout.
 
     \b
     The API has no authentication: run it on a private network only.
@@ -1111,7 +1115,8 @@ def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: 
         except ImportError:
             click.echo(
                 "Server dependencies not installed.\n"
-                "Run: pip install claude-multi-usage[server]",
+                "Install with the [server] extra: deploy/systemd/install.sh, "
+                "or `uv sync --extra server` in a checkout.",
                 err=True,
             )
             raise SystemExit(1)

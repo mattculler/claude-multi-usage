@@ -8,15 +8,19 @@
 #   sudo deploy/systemd/install.sh --uninstall  # remove the service and the venv
 #
 # What it does:
+#   - installs uv into /usr/local/bin if no uv is found (https://astral.sh/uv)
 #   - creates a system user "cmu" with no login shell
-#   - creates a virtualenv in /opt/cmu/venv and installs this checkout into it
-#     with the [server] extra (needs network access to PyPI for dependencies)
+#   - creates a virtualenv in /opt/cmu/venv from uv.lock with the [server]
+#     extra (needs network access to PyPI; uv downloads a Python into
+#     /opt/cmu/python if the host has none that is 3.9 or newer)
 #   - creates /var/lib/cmu for the SQLite database
 #   - writes /etc/default/cmu-server (settings; created once, never overwritten)
 #   - installs cmu-server.service, enables it and (re)starts it
 #   - waits for /api/health to answer
 #
 # To upgrade: git pull, then re-run this script. The database is kept.
+# Set UV=/path/to/uv to use a particular uv, PYTHON=3.12 (or a path) to pick
+# the interpreter.
 #
 # The server has no authentication. Keep it on a private network.
 set -euo pipefail
@@ -30,7 +34,7 @@ UNIT_NAME=cmu-server.service
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT_SRC="$SCRIPT_DIR/$UNIT_NAME"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PYTHON="${PYTHON:-python3}"
+UV_INSTALL_URL=https://astral.sh/uv/install.sh
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -43,20 +47,39 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     systemctl daemon-reload
     rm -rf "$INSTALL_DIR"
     echo "Removed $UNIT_NAME and $INSTALL_DIR."
-    echo "Kept the database in $DATA_DIR, the settings in $DEFAULTS_FILE and the '$APP_USER' user."
+    echo "Kept the database in $DATA_DIR, the settings in $DEFAULTS_FILE, the '$APP_USER' user and uv."
     echo "To remove those too:"
     echo "  sudo rm -rf $DATA_DIR $DEFAULTS_FILE && sudo userdel $APP_USER"
     exit 0
 fi
 [[ -z "${1:-}" ]] || die "unknown argument: $1 (only --uninstall is supported)"
 
-[[ -f "$REPO_ROOT/pyproject.toml" && -f "$UNIT_SRC" ]] \
-    || die "run this script from a checkout of the repository (pyproject.toml not found at $REPO_ROOT)"
-command -v "$PYTHON" >/dev/null 2>&1 || die "$PYTHON not found; need Python 3.9+ (set PYTHON=/path/to/python3 to choose one)"
-# On Debian/Ubuntu the venv module is always present but ensurepip (which
-# `python3 -m venv` needs) lives in the separate python3-venv package.
-"$PYTHON" -c 'import sys, venv, ensurepip; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null \
-    || die "$PYTHON must be Python 3.9+ with venv and ensurepip (Debian/Ubuntu: apt install python3-venv)"
+[[ -f "$REPO_ROOT/pyproject.toml" && -f "$REPO_ROOT/uv.lock" && -f "$UNIT_SRC" ]] \
+    || die "run this script from a checkout of the repository (pyproject.toml and uv.lock not found at $REPO_ROOT)"
+
+# uv: the one named in $UV, the one on root's PATH, the usual places, or the
+# invoking user's own copy. Otherwise install it for the whole host.
+find_uv() {
+    local sudo_home="" candidate
+    [[ -n "${SUDO_USER:-}" ]] && sudo_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+    for candidate in "${UV:-}" "$(command -v uv 2>/dev/null || true)" /usr/local/bin/uv \
+                     /root/.local/bin/uv "${sudo_home:+$sudo_home/.local/bin/uv}"; do
+        if [[ -n "$candidate" && -x "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+if ! UV="$(find_uv)"; then
+    echo "==> Installing uv into /usr/local/bin ($UV_INSTALL_URL)"
+    command -v curl >/dev/null 2>&1 \
+        || die "curl is needed to download uv (apt install curl), or install uv yourself and set UV=/path/to/uv"
+    curl -LsSf "$UV_INSTALL_URL" | env UV_UNMANAGED_INSTALL=/usr/local/bin sh
+    UV=/usr/local/bin/uv
+    [[ -x "$UV" ]] || die "uv installation failed: $UV not found"
+fi
+echo "==> Using $UV ($("$UV" --version))"
 
 echo "==> System user and directories"
 if ! id -u "$APP_USER" >/dev/null 2>&1; then
@@ -66,29 +89,20 @@ fi
 install -d -m 755 "$INSTALL_DIR"
 install -d -m 750 -o "$APP_USER" -g "$APP_USER" "$DATA_DIR"
 
-echo "==> Virtualenv in $VENV"
-# A venv whose pip is missing (e.g. created before python3-venv was installed)
-# is recreated rather than reused.
-if [[ ! -x "$VENV/bin/python" ]] || ! "$VENV/bin/python" -m pip --version >/dev/null 2>&1; then
-    rm -rf "$VENV"
-    "$PYTHON" -m venv "$VENV"
-fi
-"$VENV/bin/python" -m pip install --quiet --upgrade pip
-
-# Build from a scratch copy so pip (running as root) does not leave root-owned
-# build/ and *.egg-info/ directories in the checkout.
-BUILD_DIR="$(mktemp -d)"
-trap 'rm -rf "$BUILD_DIR"' EXIT
-tar -C "$REPO_ROOT" \
-    --exclude=.git --exclude=.venv --exclude=venv --exclude=build \
-    --exclude='*.egg-info' --exclude=__pycache__ --exclude=.pytest_cache \
-    -cf - . | tar -xf - -C "$BUILD_DIR"
-"$VENV/bin/python" -m pip install --quiet --upgrade "$BUILD_DIR[server]"
+echo "==> Virtualenv in $VENV (from uv.lock)"
+# The venv is built by root but used by the "cmu" user, so it must not share
+# files with root's cache (copy, not hardlink) and a downloaded Python must
+# live somewhere world-readable rather than under /root.
+export UV_PROJECT_ENVIRONMENT="$VENV"
+export UV_LINK_MODE=copy
+export UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/python"
+"$UV" sync --project "$REPO_ROOT" --locked --no-dev --no-editable --extra server --quiet \
+    ${PYTHON:+--python "$PYTHON"}
 [[ -x "$VENV/bin/cmu" ]] || die "installation failed: $VENV/bin/cmu not found"
 
 echo "==> Settings in $DEFAULTS_FILE"
 if [[ ! -f "$DEFAULTS_FILE" ]]; then
-    cat > "$DEFAULTS_FILE" <<'EOF'
+    cat > "$DEFAULTS_FILE" <<'EOT'
 # Settings for cmu-server.service. Uncomment to change a value, then:
 #   sudo systemctl restart cmu-server
 #
@@ -102,7 +116,7 @@ if [[ ! -f "$DEFAULTS_FILE" ]]; then
 #CMU_DB_PATH=/var/lib/cmu/server.db
 # Largest accepted sync payload in bytes.
 #CMU_MAX_BODY_BYTES=2097152
-EOF
+EOT
     chmod 644 "$DEFAULTS_FILE"
 fi
 
