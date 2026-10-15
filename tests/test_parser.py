@@ -56,24 +56,32 @@ def test_projects_with_same_repo_name_are_aggregated(fake_home):
 
 
 def test_project_name_falls_back_to_directory_heuristic_without_cwd(fake_home):
-    no_cwd = [{"type": "user", "timestamp": "2026-01-01T00:00:00Z",
-               "message": {"role": "user", "content": "hi"}}]
+    no_cwd = [
+        {
+            "type": "user",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": "hi"},
+        }
+    ]
     _write_session(fake_home.projects / "-Users-bob-workspace-tool-tool" / "s.jsonl", no_cwd)
     _write_session(fake_home.projects / "-home-bob-src-other" / "s.jsonl", no_cwd)
     _write_session(fake_home.projects / "C--Users-bob-src-winproj" / "s.jsonl", no_cwd)
     names = {p.name for p in parser.parse_projects()}
-    assert "tool" in names          # "workspace" heuristic, duplicate segment collapsed
-    assert "other" in names         # encoded absolute path: last segment only
-    assert "winproj" in names       # Windows drive encoding: last segment only
+    assert "tool" in names  # "workspace" heuristic, duplicate segment collapsed
+    assert "other" in names  # encoded absolute path: last segment only
+    assert "winproj" in names  # Windows drive encoding: last segment only
     assert not any(n.startswith("-") or n.startswith("C--") for n in names)
 
 
-@pytest.mark.parametrize("raw,expected", [
-    ("-home-me-src-thing", "thing"),
-    ("C--Users-bob-src-proj", "proj"),
-    ("-Users-me-workspace-apr-backend-apr-backend", "apr-backend"),
-    ("-Users-me-workspace-clients-acme-app", "clients-acme-app"),
-])
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("-home-me-src-thing", "thing"),
+        ("C--Users-bob-src-proj", "proj"),
+        ("-Users-me-workspace-apr-backend-apr-backend", "apr-backend"),
+        ("-Users-me-workspace-clients-acme-app", "clients-acme-app"),
+    ],
+)
 def test_project_name_from_dir(raw, expected):
     assert parser._project_name_from_dir(raw) == expected
 
@@ -112,8 +120,12 @@ def test_worktree_sessions_count_towards_their_repository(fake_home):
         e["cwd"] = "/home/alice/workspace/myproj/.claude/worktrees/fluffy-otter"
         if e["type"] == "assistant":
             e["message"] = dict(e["message"], id="wt-" + e["message"]["id"])
-    _write_session(fake_home.projects / "-home-alice-workspace-myproj--claude-worktrees-fluffy-otter"
-                   / "w.jsonl", entries)
+    _write_session(
+        fake_home.projects
+        / "-home-alice-workspace-myproj--claude-worktrees-fluffy-otter"
+        / "w.jsonl",
+        entries,
+    )
     projects = {p.name: p for p in parser.parse_projects()}
     assert "fluffy-otter" not in projects
     assert projects["myproj"].session_count == 2
@@ -126,8 +138,14 @@ def test_first_and_last_seen_merge_across_timestamped_and_mtime_only_logs(fake_h
     import os
     from datetime import date
 
-    a = [{"type": "user", "timestamp": "2026-01-10T12:00:00.000Z", "cwd": "/a/myrepo",
-          "message": {"role": "user", "content": "hi"}}]
+    a = [
+        {
+            "type": "user",
+            "timestamp": "2026-01-10T12:00:00.000Z",
+            "cwd": "/a/myrepo",
+            "message": {"role": "user", "content": "hi"},
+        }
+    ]
     b = [{"type": "user", "cwd": "/b/myrepo", "message": {"role": "user", "content": "hi"}}]
     _write_session(fake_home.projects / "-a-myrepo" / "s.jsonl", a)
     fb = fake_home.projects / "-b-myrepo" / "s.jsonl"
@@ -138,19 +156,22 @@ def test_first_and_last_seen_merge_across_timestamped_and_mtime_only_logs(fake_h
     p = {p.name: p for p in parser.parse_projects()}["myrepo"]
     assert p.session_count == 2
     assert p.first_seen.tzinfo is not None and p.last_seen.tzinfo is not None
-    assert p.first_seen.astimezone().date() == date(2025, 6, 1)   # from B's mtime, local date
-    assert p.last_seen.date() == date(2026, 1, 10)                 # from A's timestamp (UTC)
+    assert p.first_seen.astimezone().date() == date(2025, 6, 1)  # from B's mtime, local date
+    assert p.last_seen.date() == date(2026, 1, 10)  # from A's timestamp (UTC)
 
 
-@pytest.mark.parametrize("cwd,expected", [
-    ("/home/me/src/my-repo", "my-repo"),
-    ("/home/me/src/my-repo/", "my-repo"),
-    ("C:\\Users\\me\\proj", "proj"),
-    ("/", "home"),
-    ("/home/me/src/my-repo/.claude/worktrees/fluffy-otter", "my-repo"),
-    ("/home/me/src/my-repo/.claude/worktrees/fluffy-otter/sub", "my-repo"),
-    ("C:\\Users\\me\\proj\\.claude\\worktrees\\wt1", "proj"),
-])
+@pytest.mark.parametrize(
+    "cwd,expected",
+    [
+        ("/home/me/src/my-repo", "my-repo"),
+        ("/home/me/src/my-repo/", "my-repo"),
+        ("C:\\Users\\me\\proj", "proj"),
+        ("/", "home"),
+        ("/home/me/src/my-repo/.claude/worktrees/fluffy-otter", "my-repo"),
+        ("/home/me/src/my-repo/.claude/worktrees/fluffy-otter/sub", "my-repo"),
+        ("C:\\Users\\me\\proj\\.claude\\worktrees\\wt1", "proj"),
+    ],
+)
 def test_repo_name_from_cwd(cwd, expected):
     assert parser._repo_name_from_cwd(cwd) == expected
 
@@ -211,14 +232,17 @@ def test_load_usage_data_without_stats_cache(fake_home):
     assert [p.name for p in data.projects] == ["myproj", "secret-client-acme"]
 
 
-@pytest.mark.parametrize("raw,expected", [
-    ("apr-backend-assignment-apr-backend-assignment", "apr-backend-assignment"),
-    # documented behaviour; parse_projects() later collapses "/-" to "-"
-    ("url-jarvis-url-jarvis-docs", "url-jarvis/-docs"),
-    ("plain-name", "plain-name"),
-    # known false positive of the heuristic
-    ("foo-foobar", "foo/bar"),
-])
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("apr-backend-assignment-apr-backend-assignment", "apr-backend-assignment"),
+        # documented behaviour; parse_projects() later collapses "/-" to "-"
+        ("url-jarvis-url-jarvis-docs", "url-jarvis/-docs"),
+        ("plain-name", "plain-name"),
+        # known false positive of the heuristic
+        ("foo-foobar", "foo/bar"),
+    ],
+)
 def test_deduplicate_project_name(raw, expected):
     assert _deduplicate_project_name(raw) == expected
 

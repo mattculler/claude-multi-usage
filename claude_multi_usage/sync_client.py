@@ -46,33 +46,48 @@ def build_sync_payload(key_values: list[str]) -> dict:
         "total_messages": data.total_messages,
         "first_session_date": data.first_session_date,
         "model_usage": [
-            {"model": m.model, "input_tokens": m.input_tokens,
-             "output_tokens": m.output_tokens, "cache_read_tokens": m.cache_read_tokens,
-             "cache_creation_tokens": m.cache_creation_tokens}
+            {
+                "model": m.model,
+                "input_tokens": m.input_tokens,
+                "output_tokens": m.output_tokens,
+                "cache_read_tokens": m.cache_read_tokens,
+                "cache_creation_tokens": m.cache_creation_tokens,
+            }
             for m in data.model_usage
         ],
         "hour_counts": {str(k): v for k, v in data.hour_counts.items()},
         # Which day today_hourly describes, so stale data is labelled correctly
         "today_hourly_date": now.strftime("%Y-%m-%d"),
         "today_hourly": [
-            {"hour": h.hour, "message_count": h.message_count,
-             "session_count": h.session_count, "tokens": h.tokens}
+            {
+                "hour": h.hour,
+                "message_count": h.message_count,
+                "session_count": h.session_count,
+                "tokens": h.tokens,
+            }
             for h in today_hourly
         ],
         "daily_activity": [
-            {"date": a.date, "message_count": a.message_count,
-             "session_count": a.session_count, "tool_call_count": a.tool_call_count}
+            {
+                "date": a.date,
+                "message_count": a.message_count,
+                "session_count": a.session_count,
+                "tool_call_count": a.tool_call_count,
+            }
             for a in data.daily_activity
         ],
         "daily_model_tokens": [
-            {"date": t.date, "tokens_by_model": t.tokens_by_model}
-            for t in data.daily_model_tokens
+            {"date": t.date, "tokens_by_model": t.tokens_by_model} for t in data.daily_model_tokens
         ],
         "projects": [
-            {"name": p.name, "session_count": p.session_count,
-             "output_tokens": p.output_tokens, "input_tokens": p.input_tokens,
-             "first_seen": p.first_seen.isoformat() if p.first_seen else None,
-             "last_seen": p.last_seen.isoformat() if p.last_seen else None}
+            {
+                "name": p.name,
+                "session_count": p.session_count,
+                "output_tokens": p.output_tokens,
+                "input_tokens": p.input_tokens,
+                "first_seen": p.first_seen.isoformat() if p.first_seen else None,
+                "last_seen": p.last_seen.isoformat() if p.last_seen else None,
+            }
             for p in data.projects
         ],
     }

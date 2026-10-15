@@ -14,8 +14,8 @@ from rich.text import Text
 from .dashboard import format_tokens
 from .pricing import format_cost
 
-
 # -- Helpers ------------------------------------------------------------------
+
 
 def _rel_level(value: int, max_val: int, n_levels: int) -> int:
     """Return 0..n_levels based on relative ratio to max_val."""
@@ -76,7 +76,7 @@ def make_daily_grass(blocks: list[tuple[int, float, int]]) -> Panel:
     for i in range(8):
         h = i * 3
         marker = "*" if i == now_blk else " "
-        label = "%02d%s" % (h, marker)
+        label = f"{h:02d}{marker}"
         line.append(label.center(_DW), style="dim")
     text.append_text(line)
     text.append("\n")
@@ -97,15 +97,14 @@ def make_daily_grass(blocks: list[tuple[int, float, int]]) -> Panel:
     cost = sum(b[1] for b in blocks)
     active = sum(1 for t in toks if t > 0)
     text.append("\n")
-    s = "  %s tokens" % format_tokens(tot)
+    s = f"  {format_tokens(tot)} tokens"
     if cost > 0:
-        s += "  %s" % format_cost(cost)
-    s += "  |  %d active blocks" % active
+        s += f"  {format_cost(cost)}"
+    s += f"  |  {active} active blocks"
     text.append(s + "\n", style="bold cyan")
 
     today_str = datetime.now().strftime("%Y-%m-%d")
-    return Panel(text, title="Today (%s)" % today_str,
-                 border_style="green", width=58, padding=(0, 1))
+    return Panel(text, title=f"Today ({today_str})", border_style="green", width=58, padding=(0, 1))
 
 
 # -- Weekly Grass Garden ------------------------------------------------------
@@ -194,16 +193,17 @@ def make_weekly_garden(daily: list[tuple[str, int, float]]) -> Panel:
     cost = sum(d[2] for d in daily)
     active = sum(1 for t in toks if t > 0)
     text.append("\n")
-    s = "  Total: %s tokens" % format_tokens(tot)
+    s = f"  Total: {format_tokens(tot)} tokens"
     if cost > 0:
-        s += "  %s" % format_cost(cost)
-    s += "  |  %d/7 days active" % active
+        s += f"  {format_cost(cost)}"
+    s += f"  |  {active}/7 days active"
     text.append(s + "\n", style="bold cyan")
 
     start = daily[0][0]
     end = daily[-1][0]
-    return Panel(text, title="This Week (%s ~ %s)" % (start[5:], end[5:]),
-                 border_style="cyan", padding=(0, 1))
+    return Panel(
+        text, title=f"This Week ({start[5:]} ~ {end[5:]})", border_style="cyan", padding=(0, 1)
+    )
 
 
 # -- Monthly Forest -----------------------------------------------------------
@@ -223,18 +223,14 @@ def _monthly_col(level: int) -> list[str]:
     dpipe = "||".center(_MW)
     tree_top = "/\\".center(_MW)
 
-    if level == 0:
-        return []
-    elif level == 1:
-        return [pipe]
-    elif level == 2:
-        return [pipe, pipe]
-    elif level == 3:
-        return [dpipe, dpipe, dpipe]
-    elif level == 4:
-        return [dpipe, dpipe, tree_top]
-    else:
-        return [dpipe, dpipe, dpipe, tree_top]
+    rows = {
+        0: [],
+        1: [pipe],
+        2: [pipe, pipe],
+        3: [dpipe, dpipe, dpipe],
+        4: [dpipe, dpipe, tree_top],
+    }
+    return rows.get(level, [dpipe, dpipe, dpipe, tree_top])
 
 
 def _monthly_style(level: int, row_from_bottom: int) -> str:
@@ -285,15 +281,15 @@ def make_monthly_forest(days: list[tuple[int, int, float]]) -> Panel:
     line = Text()
     line.append("  ")
     ground = "~^~" * (n + 1)
-    line.append(ground[:n * _MW], style="dim yellow")
+    line.append(ground[: n * _MW], style="dim yellow")
     text.append_text(line)
     text.append("\n")
 
     # day labels (show 1st, every 5th, last, today)
     line = Text()
     line.append("  ")
-    for i, (day, _, _) in enumerate(days):
-        show = (day == 1 or day % 5 == 0 or day == n or day == today_day)
+    for day, _, _ in days:
+        show = day == 1 or day % 5 == 0 or day in (n, today_day)
         if show:
             marker = "*" if day == today_day else ""
             label = str(day) + marker
@@ -308,15 +304,14 @@ def make_monthly_forest(days: list[tuple[int, int, float]]) -> Panel:
     cost = sum(d[2] for d in days)
     active = sum(1 for t in toks if t > 0)
     text.append("\n")
-    s = "  Total: %s tokens" % format_tokens(tot)
+    s = f"  Total: {format_tokens(tot)} tokens"
     if cost > 0:
-        s += "  %s" % format_cost(cost)
-    s += "  |  %d/%d days active" % (active, today_day)
+        s += f"  {format_cost(cost)}"
+    s += f"  |  {active}/{today_day} days active"
     text.append(s + "\n", style="bold cyan")
 
     month_name = datetime.now().strftime("%B %Y")
-    return Panel(text, title="This Month (%s)" % month_name,
-                 border_style="magenta", padding=(0, 1))
+    return Panel(text, title=f"This Month ({month_name})", border_style="magenta", padding=(0, 1))
 
 
 # -- Yearly Ecosystem --------------------------------------------------------
@@ -324,8 +319,7 @@ def make_monthly_forest(days: list[tuple[int, int, float]]) -> Panel:
 
 _YW = 6  # column width per month (12*6+margins fits in 80-col terminal)
 _YMAX = 4  # max tree level per month
-_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 _ECO_LABELS = ["barren", "sprouting", "growing", "young forest", "forest", "ecosystem"]
 
@@ -352,16 +346,13 @@ def _yearly_col(level: int) -> list[str]:
     canopy_sm = "/\\".center(_YW)
     canopy_lg = "/ \\".center(_YW)
 
-    if level == 0:
-        return []
-    elif level == 1:
-        return [pipe]
-    elif level == 2:
-        return [dpipe, canopy_sm]
-    elif level == 3:
-        return [dpipe, dpipe, canopy_lg, canopy_sm]
-    else:
-        return [dpipe, dpipe, dpipe, canopy_lg, canopy_sm]
+    rows = {
+        0: [],
+        1: [pipe],
+        2: [dpipe, canopy_sm],
+        3: [dpipe, dpipe, canopy_lg, canopy_sm],
+    }
+    return rows.get(level, [dpipe, dpipe, dpipe, canopy_lg, canopy_sm])
 
 
 def _yearly_style(level: int, row_from_bottom: int) -> str:
@@ -485,12 +476,11 @@ def make_yearly_ecosystem(monthly: list[tuple[str, int, float]]) -> Panel:
     cost = sum(m[2] for m in monthly)
     eco_label = _ECO_LABELS[eco]
     text.append("\n")
-    s = "  Ecosystem: %s  |  %s tokens" % (eco_label, format_tokens(tot))
+    s = f"  Ecosystem: {eco_label}  |  {format_tokens(tot)} tokens"
     if cost > 0:
-        s += "  %s" % format_cost(cost)
-    s += "  |  %d/12 months active" % active
+        s += f"  {format_cost(cost)}"
+    s += f"  |  {active}/12 months active"
     text.append(s + "\n", style="bold cyan")
 
     year = datetime.now().year
-    return Panel(text, title="This Year (%d)" % year,
-                 border_style="red", width=82, padding=(0, 1))
+    return Panel(text, title=f"This Year ({year})", border_style="red", width=82, padding=(0, 1))

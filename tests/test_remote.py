@@ -16,13 +16,18 @@ CHECKOUT = Path(remote.__file__).resolve().parent.parent
 def _bash_syntax_ok(script: str) -> bool:
     if not shutil.which("bash"):
         pytest.skip("bash not available")
-    return subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True).returncode == 0
+    return (
+        subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True).returncode == 0
+    )
 
 
 def _make_checkout(tmp_path, git=False):
     src = tmp_path / "checkout"
-    shutil.copytree(CHECKOUT / "claude_multi_usage", src / "claude_multi_usage",
-                    ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(
+        CHECKOUT / "claude_multi_usage",
+        src / "claude_multi_usage",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
     shutil.copy(CHECKOUT / "pyproject.toml", src / "pyproject.toml")
     shutil.copy(CHECKOUT / "README.md", src / "README.md")
     if git:
@@ -53,7 +58,11 @@ def test_default_source_falls_back_to_repository_url(monkeypatch, tmp_path):
 
     class Meta:
         def get_all(self, key):
-            return ["Homepage, https://example.com/x", "Repository, https://github.com/me/cmu"] if key == "Project-URL" else None
+            return (
+                ["Homepage, https://example.com/x", "Repository, https://github.com/me/cmu"]
+                if key == "Project-URL"
+                else None
+            )
 
     monkeypatch.setattr(metadata, "metadata", lambda name: Meta())
     assert remote.default_source() == "git+https://github.com/me/cmu"
@@ -82,10 +91,20 @@ def test_make_tarball_sends_only_source_files(tmp_path, git):
 
 
 def test_install_script_is_valid_bash_and_configures_everything():
-    script = remote.install_script(True, None, "http://10.0.0.5:8000", [("k1", "team key"), ("k2", "")],
-                                   alias="office box", every_minutes=7, python="3.12", linger=True)
+    script = remote.install_script(
+        True,
+        None,
+        "http://10.0.0.5:8000",
+        [("k1", "team key"), ("k2", "")],
+        alias="office box",
+        every_minutes=7,
+        python="3.12",
+        linger=True,
+    )
     assert _bash_syntax_ok(script)
-    assert "curl -LsSf https://astral.sh/uv/install.sh | sh" in script  # uv installed only if missing
+    assert (
+        "curl -LsSf https://astral.sh/uv/install.sh | sh" in script
+    )  # uv installed only if missing
     assert 'tool install --quiet --reinstall --python 3.12 "$BASE/src"' in script
     assert 'rm -rf "$BASE/src"' in script
     assert '"$CMU" config server http://10.0.0.5:8000' in script
@@ -97,7 +116,9 @@ def test_install_script_is_valid_bash_and_configures_everything():
     assert 'UV_TOOL_BIN_DIR="$BASE/bin"' in script  # never clobber someone else's ~/.local/bin/cmu
     assert "pip install" not in script and "venv" not in script
 
-    req = remote.install_script(False, "git+https://github.com/x/y.git", "http://s", [("k", "")], None, 15)
+    req = remote.install_script(
+        False, "git+https://github.com/x/y.git", "http://s", [("k", "")], None, 15
+    )
     assert _bash_syntax_ok(req)
     assert "tool install --quiet --reinstall git+https://github.com/x/y.git" in req
     assert "--python" not in req and "config alias" not in req and "--linger" not in req
@@ -116,8 +137,17 @@ def test_install_streams_checkout_then_runs_script(tmp_path):
     def fake_ssh(host, args, input_bytes, ssh_options):
         calls.append((host, args, input_bytes, ssh_options))
 
-    lines = remote.install("alice@box", "http://s:8000", [("k1", "")], 15, alias="box",
-                           source=str(src), ssh_options=["-p", "2222"], linger=True, run=fake_ssh)
+    lines = remote.install(
+        "alice@box",
+        "http://s:8000",
+        [("k1", "")],
+        15,
+        alias="box",
+        source=str(src),
+        ssh_options=["-p", "2222"],
+        linger=True,
+        run=fake_ssh,
+    )
     assert len(calls) == 2
     host, args, tarball, opts = calls[0]
     assert host == "alice@box" and opts == ["-p", "2222"]
@@ -132,8 +162,14 @@ def test_install_streams_checkout_then_runs_script(tmp_path):
 
 def test_install_from_requirement_sends_no_tarball():
     calls = []
-    remote.install("box", "http://s", [("k", "")], 15, source="git+https://github.com/x/y.git",
-                   run=lambda *a: calls.append(a))
+    remote.install(
+        "box",
+        "http://s",
+        [("k", "")],
+        15,
+        source="git+https://github.com/x/y.git",
+        run=lambda *a: calls.append(a),
+    )
     assert len(calls) == 1
     assert calls[0][1] == ["bash", "-s"]
     assert b"git+https://github.com/x/y.git" in calls[0][2]
@@ -147,34 +183,94 @@ def test_uninstall_runs_script():
 
 # -- CLI --------------------------------------------------------------------------
 
+
 def test_cli_remote_install_uses_local_config_by_default(fake_home, monkeypatch):
     config.set_server_url("http://sync.invalid")
     config.add_key("k1", "team")
     seen = {}
 
-    def fake_install(host, server_url, keys, every, alias=None, source=None, python=None,
-                     ssh_options=None, linger=False):
-        seen.update(host=host, server_url=server_url, keys=keys, every=every, alias=alias,
-                    source=source, python=python, ssh_options=ssh_options, linger=linger)
+    def fake_install(
+        host,
+        server_url,
+        keys,
+        every,
+        alias=None,
+        source=None,
+        python=None,
+        ssh_options=None,
+        linger=False,
+    ):
+        seen.update(
+            host=host,
+            server_url=server_url,
+            keys=keys,
+            every=every,
+            alias=alias,
+            source=source,
+            python=python,
+            ssh_options=ssh_options,
+            linger=linger,
+        )
         return ["done"]
 
     monkeypatch.setattr(remote, "install", fake_install)
-    r = CliRunner().invoke(cli.main, ["remote", "install", "box", "--every", "5", "--alias", "lap",
-                                      "--ssh-option", "-o StrictHostKeyChecking=accept-new", "--linger"])
+    r = CliRunner().invoke(
+        cli.main,
+        [
+            "remote",
+            "install",
+            "box",
+            "--every",
+            "5",
+            "--alias",
+            "lap",
+            "--ssh-option",
+            "-o StrictHostKeyChecking=accept-new",
+            "--linger",
+        ],
+    )
     assert r.exit_code == 0, r.output
-    assert seen == {"host": "box", "server_url": "http://sync.invalid", "keys": [("k1", "team")],
-                    "every": 5, "alias": "lap", "source": None, "python": None,
-                    "ssh_options": ["-o", "StrictHostKeyChecking=accept-new"], "linger": True}
+    assert seen == {
+        "host": "box",
+        "server_url": "http://sync.invalid",
+        "keys": [("k1", "team")],
+        "every": 5,
+        "alias": "lap",
+        "source": None,
+        "python": None,
+        "ssh_options": ["-o", "StrictHostKeyChecking=accept-new"],
+        "linger": True,
+    }
     assert "done" in r.output and "Warning" not in r.output
 
 
 def test_cli_remote_install_overrides_and_localhost_warning(fake_home, monkeypatch):
     seen = {}
-    monkeypatch.setattr(remote, "install", lambda host, server_url, keys, every, **kw: seen.update(
-        server_url=server_url, keys=keys, **kw) or [])
-    r = CliRunner().invoke(cli.main, ["remote", "install", "box", "--server", "http://localhost:8000",
-                                      "--key", "a", "--key", "b", "--from", "git+https://g/r.git",
-                                      "--python", "3.11"])
+    monkeypatch.setattr(
+        remote,
+        "install",
+        lambda host, server_url, keys, every, **kw: (
+            seen.update(server_url=server_url, keys=keys, **kw) or []
+        ),
+    )
+    r = CliRunner().invoke(
+        cli.main,
+        [
+            "remote",
+            "install",
+            "box",
+            "--server",
+            "http://localhost:8000",
+            "--key",
+            "a",
+            "--key",
+            "b",
+            "--from",
+            "git+https://g/r.git",
+            "--python",
+            "3.11",
+        ],
+    )
     assert r.exit_code == 0, r.output
     assert "Warning" in r.output and "points at this machine" in r.output
     assert seen["server_url"] == "http://localhost:8000" and seen["keys"] == [("a", ""), ("b", "")]
@@ -189,7 +285,9 @@ def test_cli_remote_install_requires_config(fake_home):
     assert r.exit_code == 1 and "No keys" in r.output
 
 
-@pytest.mark.parametrize("code,text", [(255, "ssh to box failed"), (1, "Setup on box failed (exit 1)")])
+@pytest.mark.parametrize(
+    "code,text", [(255, "ssh to box failed"), (1, "Setup on box failed (exit 1)")]
+)
 def test_cli_remote_install_reports_failures(fake_home, monkeypatch, code, text):
     config.set_server_url("http://x")
     config.add_key("k")
@@ -203,6 +301,8 @@ def test_cli_remote_install_reports_failures(fake_home, monkeypatch, code, text)
 
 
 def test_cli_remote_uninstall(fake_home, monkeypatch):
-    monkeypatch.setattr(remote, "uninstall", lambda host, ssh_options=None: [f"cmu removed from {host}"])
+    monkeypatch.setattr(
+        remote, "uninstall", lambda host, ssh_options=None: [f"cmu removed from {host}"]
+    )
     r = CliRunner().invoke(cli.main, ["remote", "uninstall", "box"])
     assert r.exit_code == 0 and "cmu removed from box" in r.output

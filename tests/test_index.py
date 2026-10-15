@@ -20,11 +20,21 @@ def _local_date(ts: str) -> str:
 
 
 def _entry(mid, out, ts, cwd=None, model=None, **usage):
-    e = {"type": "assistant", "timestamp": ts,
-         "message": {"id": mid, "model": model or "claude-sonnet-4-5-20250929", "content": [],
-                     "usage": {"input_tokens": usage.get("inp", 0), "output_tokens": out,
-                               "cache_read_input_tokens": usage.get("cr", 0),
-                               "cache_creation_input_tokens": usage.get("cc", 0)}}}
+    e = {
+        "type": "assistant",
+        "timestamp": ts,
+        "message": {
+            "id": mid,
+            "model": model or "claude-sonnet-4-5-20250929",
+            "content": [],
+            "usage": {
+                "input_tokens": usage.get("inp", 0),
+                "output_tokens": out,
+                "cache_read_input_tokens": usage.get("cr", 0),
+                "cache_creation_input_tokens": usage.get("cc", 0),
+            },
+        },
+    }
     if cwd:
         e["cwd"] = cwd
     return e
@@ -64,6 +74,7 @@ def _myproj_tokens(idx):
 
 # -- incremental refresh ------------------------------------------------------
 
+
 def test_first_refresh_indexes_everything_then_nothing(fake_home, monkeypatch):
     opened = _count_jsonl_opens(monkeypatch, lambda: index.get_index())
     assert len(opened) == 2  # both session files read once on first use
@@ -81,7 +92,12 @@ def test_appended_lines_are_read_from_the_old_offset(fake_home, monkeypatch):
     size_before = path.stat().st_size
 
     with open(path, "a") as f:
-        f.write(json.dumps(_entry("m-late", 250, "2026-01-01T00:00:00Z", cwd="/home/alice/workspace/myproj")) + "\n")
+        f.write(
+            json.dumps(
+                _entry("m-late", 250, "2026-01-01T00:00:00Z", cwd="/home/alice/workspace/myproj")
+            )
+            + "\n"
+        )
     os.utime(path, None)
 
     seeks = []
@@ -95,6 +111,7 @@ def test_appended_lines_are_read_from_the_old_offset(fake_home, monkeypatch):
             def seek(pos, *a):
                 seeks.append(pos)
                 return orig_seek(pos, *a)
+
             fh.seek = seek
         return fh
 
@@ -103,7 +120,7 @@ def test_appended_lines_are_read_from_the_old_offset(fake_home, monkeypatch):
     monkeypatch.setattr(builtins, "open", real_open)
 
     assert (stats.indexed, stats.appended) == (0, 1)
-    assert size_before in seeks                      # resumed where it left off
+    assert size_before in seeks  # resumed where it left off
     assert min(seeks) >= size_before - index._TAIL_BYTES  # never re-read the body
     assert _myproj_tokens(idx) == before + 250
 
@@ -157,8 +174,14 @@ def test_partial_trailing_line_is_deferred_until_complete(fake_home):
 
 def test_complete_final_line_without_newline_is_counted(fake_home):
     path = fake_home.projects / "-home-alice-workspace-myproj" / "nonl.jsonl"
-    _write(path, [_entry("n1", 100, "2026-01-01T00:00:00Z", cwd="/home/alice/workspace/myproj"),
-                  _entry("n2", 200, "2026-01-01T00:00:01Z")], newline=False)
+    _write(
+        path,
+        [
+            _entry("n1", 100, "2026-01-01T00:00:00Z", cwd="/home/alice/workspace/myproj"),
+            _entry("n2", 200, "2026-01-01T00:00:01Z"),
+        ],
+        newline=False,
+    )
     idx, _ = _refresh()
     assert _myproj_tokens(idx) == fake_home.today_output_tokens + 300
     # the writer later adds the newline and another line: still exact
@@ -186,7 +209,15 @@ def test_rewritten_file_of_same_size_is_reindexed_in_full(fake_home):
     idx, _ = _refresh()
     assert _myproj_tokens(idx) == fake_home.today_output_tokens + 100
     _write(path, [_entry("r9", 900, "2026-01-01T00:00:00Z", cwd="/home/alice/workspace/myproj")])
-    assert path.stat().st_size == len(json.dumps(_entry("r1", 100, "2026-01-01T00:00:00Z", cwd="/home/alice/workspace/myproj"))) + 1
+    assert (
+        path.stat().st_size
+        == len(
+            json.dumps(
+                _entry("r1", 100, "2026-01-01T00:00:00Z", cwd="/home/alice/workspace/myproj")
+            )
+        )
+        + 1
+    )
     os.utime(path, (time.time() + 5, time.time() + 5))
     stats = idx.refresh()
     assert (stats.indexed, stats.appended) == (1, 0)
@@ -197,8 +228,13 @@ def test_replaced_by_a_longer_different_file_is_reindexed_in_full(fake_home):
     path = fake_home.projects / "-home-alice-workspace-myproj" / "rp.jsonl"
     _write(path, [_entry("p1", 100, "2026-01-01T00:00:00Z", cwd="/home/alice/workspace/myproj")])
     idx, _ = _refresh()
-    _write(path, [_entry("p5", 500, "2026-04-30T10:00:00Z", cwd="/home/alice/workspace/myproj"),
-                  _entry("p6", 600, "2026-05-01T10:00:00Z")])
+    _write(
+        path,
+        [
+            _entry("p5", 500, "2026-04-30T10:00:00Z", cwd="/home/alice/workspace/myproj"),
+            _entry("p6", 600, "2026-05-01T10:00:00Z"),
+        ],
+    )
     os.utime(path, (time.time() + 5, time.time() + 5))
     stats = idx.refresh()
     assert (stats.indexed, stats.appended) == (1, 0)
@@ -227,7 +263,9 @@ def test_deleted_file_is_kept_as_history_and_reread_if_it_returns(fake_home):
     stats = idx.refresh()
     assert (stats.indexed, stats.retired) == (1, 0)
     assert idx.file_count(include_gone=False) == 2
-    assert {p.name: p.output_tokens for p in idx.projects()}["secret-client-acme"] == fake_home.yday_output_tokens
+    assert {p.name: p.output_tokens for p in idx.projects()}[
+        "secret-client-acme"
+    ] == fake_home.yday_output_tokens
 
 
 def test_rebuild_rereads_present_files_and_keeps_gone_history(fake_home, monkeypatch):
@@ -237,8 +275,10 @@ def test_rebuild_rereads_present_files_and_keeps_gone_history(fake_home, monkeyp
     opened = _count_jsonl_opens(monkeypatch, index.rebuild)
     assert len(opened) == 1  # only the file still on disk is read again
     projects = {p.name: p.output_tokens for p in index.get_index().projects()}
-    assert projects == {"myproj": fake_home.today_output_tokens,
-                        "secret-client-acme": fake_home.yday_output_tokens}
+    assert projects == {
+        "myproj": fake_home.today_output_tokens,
+        "secret-client-acme": fake_home.yday_output_tokens,
+    }
 
 
 def test_concurrent_refreshes_do_not_double_count(fake_home, monkeypatch):
@@ -295,18 +335,25 @@ def test_concurrent_refreshes_do_not_double_count(fake_home, monkeypatch):
 
 # -- content handling ---------------------------------------------------------
 
+
 def test_streamed_blocks_keep_the_final_usage(fake_home):
     """The first JSONL line of a message carries a placeholder output count."""
     ts = "2026-01-03T10:00:00Z"
     path = fake_home.projects / "-home-alice-workspace-myproj" / "stream.jsonl"
-    blocks = [_entry("s1", 8, ts, cwd="/home/alice/workspace/myproj", inp=50, cr=1000),
-              _entry("s1", 8, ts, inp=50, cr=1000),
-              _entry("s1", 6488, ts, inp=50, cr=1000)]
+    blocks = [
+        _entry("s1", 8, ts, cwd="/home/alice/workspace/myproj", inp=50, cr=1000),
+        _entry("s1", 8, ts, inp=50, cr=1000),
+        _entry("s1", 6488, ts, inp=50, cr=1000),
+    ]
     _write(path, blocks)
     idx, _ = _refresh()
     assert _myproj_tokens(idx) == fake_home.today_output_tokens + 6488
     day = cost_cache.daily_costs()[_local_date(ts)][fake_home.model]
-    assert day["output_tokens"] == 6488 and day["input_tokens"] == 50 and day["cache_read_tokens"] == 1000
+    assert (
+        day["output_tokens"] == 6488
+        and day["input_tokens"] == 50
+        and day["cache_read_tokens"] == 1000
+    )
     # ...also when the later blocks arrive in a later refresh
     with open(path, "a") as f:
         f.write(json.dumps(_entry("s1", 7000, ts, inp=50, cr=1000)) + "\n")
@@ -316,7 +363,13 @@ def test_streamed_blocks_keep_the_final_usage(fake_home):
 
 
 def test_subagent_files_count_tokens_but_not_sessions(fake_home):
-    sub = fake_home.projects / "-home-alice-workspace-myproj" / "sess-1" / "subagents" / "agent-1.jsonl"
+    sub = (
+        fake_home.projects
+        / "-home-alice-workspace-myproj"
+        / "sess-1"
+        / "subagents"
+        / "agent-1.jsonl"
+    )
     entries = _fixture_entries(fake_home)
     for e in entries:
         if e["type"] == "assistant":
@@ -340,7 +393,9 @@ def test_nested_file_without_cwd_inherits_its_sessions_project(fake_home):
     project, not to a zero-session project guessed from the directory name."""
     d = fake_home.projects / "-home-me-foo-bar"  # directory guess would be "bar"
     _write(d / "top.jsonl", [_entry("t1", 100, "2026-01-05T10:00:00Z", cwd="/home/me/foo.bar")])
-    _write(d / "sess-1" / "subagents" / "agent-x.jsonl", [_entry("nocwd", 40, "2026-01-05T10:00:00Z")])
+    _write(
+        d / "sess-1" / "subagents" / "agent-x.jsonl", [_entry("nocwd", 40, "2026-01-05T10:00:00Z")]
+    )
     idx, _ = _refresh()
     projects = {p.name: p for p in idx.projects()}
     assert "bar" not in projects
@@ -351,16 +406,36 @@ def test_nested_file_without_cwd_inherits_its_sessions_project(fake_home):
 def test_legacy_progress_entries_are_indexed(fake_home):
     ts = "2026-02-02T10:00:05Z"
     path = fake_home.projects / "-home-alice-workspace-myproj" / "old.jsonl"
-    _write(path, [
-        {"type": "user", "timestamp": "2026-02-02T10:00:00Z", "cwd": "/home/alice/workspace/myproj",
-         "message": {"role": "user", "content": "hi"}},
-        {"type": "progress", "timestamp": ts,
-         "data": {"message": {"timestamp": ts,
-                              "message": {"id": "sub-old", "model": fake_home.model,
-                                          "usage": {"input_tokens": 0, "output_tokens": 300,
-                                                    "cache_read_input_tokens": 0,
-                                                    "cache_creation_input_tokens": 0}}}}},
-    ])
+    _write(
+        path,
+        [
+            {
+                "type": "user",
+                "timestamp": "2026-02-02T10:00:00Z",
+                "cwd": "/home/alice/workspace/myproj",
+                "message": {"role": "user", "content": "hi"},
+            },
+            {
+                "type": "progress",
+                "timestamp": ts,
+                "data": {
+                    "message": {
+                        "timestamp": ts,
+                        "message": {
+                            "id": "sub-old",
+                            "model": fake_home.model,
+                            "usage": {
+                                "input_tokens": 0,
+                                "output_tokens": 300,
+                                "cache_read_input_tokens": 0,
+                                "cache_creation_input_tokens": 0,
+                            },
+                        },
+                    }
+                },
+            },
+        ],
+    )
     _refresh()
     assert cost_cache.daily_costs()[_local_date(ts)][fake_home.model]["output_tokens"] == 300
 
@@ -368,13 +443,24 @@ def test_legacy_progress_entries_are_indexed(fake_home):
 def test_synthetic_and_unknown_models_are_counted_but_not_priced(fake_home):
     ts = "2026-02-03T10:00:00Z"
     path = fake_home.projects / "-home-alice-workspace-myproj" / "synth.jsonl"
-    _write(path, [_entry("sy", 0, ts, cwd="/home/alice/workspace/myproj", model="<synthetic>"),
-                  {"type": "assistant", "timestamp": ts,
-                   "message": {"id": "nomodel", "content": [],
-                               "usage": {"input_tokens": 1000, "output_tokens": 1000}}}])
+    _write(
+        path,
+        [
+            _entry("sy", 0, ts, cwd="/home/alice/workspace/myproj", model="<synthetic>"),
+            {
+                "type": "assistant",
+                "timestamp": ts,
+                "message": {
+                    "id": "nomodel",
+                    "content": [],
+                    "usage": {"input_tokens": 1000, "output_tokens": 1000},
+                },
+            },
+        ],
+    )
     idx, _ = _refresh()
     day = _local_date(ts)
-    assert day not in cost_cache.daily_costs()           # nothing priced
+    assert day not in cost_cache.daily_costs()  # nothing priced
     assert idx.day_usage(day)[1].tokens_by_model == {"<synthetic>": 0, "unknown": 1000}
     assert {p.name: p.cost for p in idx.projects()}["myproj"] == pytest.approx(fake_home.today_cost)
 
@@ -385,18 +471,23 @@ def test_mtime_fallback_is_replaced_once_timestamps_appear(fake_home):
     old = time.time() - 10 * 86400
     os.utime(path, (old, old))
     idx, _ = _refresh()
-    row = idx._conn.execute("SELECT ts_source, first_ts FROM files WHERE path = ?", (str(path),)).fetchone()
+    row = idx._conn.execute(
+        "SELECT ts_source, first_ts FROM files WHERE path = ?", (str(path),)
+    ).fetchone()
     assert row["ts_source"] == "mtime"
     with open(path, "a") as f:
         f.write(json.dumps(_entry("late", 5, "2025-05-01T10:00:00Z")) + "\n")
     os.utime(path, None)
     idx.refresh()
-    row = idx._conn.execute("SELECT ts_source, first_ts, last_ts FROM files WHERE path = ?", (str(path),)).fetchone()
+    row = idx._conn.execute(
+        "SELECT ts_source, first_ts, last_ts FROM files WHERE path = ?", (str(path),)
+    ).fetchone()
     assert row["ts_source"] == "log"
     assert row["first_ts"] == row["last_ts"] == "2025-05-01T10:00:00"
 
 
 # -- pricing ------------------------------------------------------------------
+
 
 def test_pricing_change_applies_without_rebuild(fake_home):
     _, total_before, _ = cost_cache.get_costs()
@@ -410,18 +501,26 @@ def test_messages_above_the_tier_threshold_are_costed_individually(fake_home):
     pricing._pricing_cache[fake_home.model]["output_above_200k"] = 30e-6
     ts_big, ts_small = "2026-03-03T10:00:00Z", "2026-03-03T10:30:00Z"
     path = fake_home.projects / "-home-alice-workspace-myproj" / "big.jsonl"
-    _write(path, [_entry("m-big", 250_000, ts_big, cwd="/home/alice/workspace/myproj"),
-                  _entry("m-small", 100, ts_small)])
+    _write(
+        path,
+        [
+            _entry("m-big", 250_000, ts_big, cwd="/home/alice/workspace/myproj"),
+            _entry("m-small", 100, ts_small),
+        ],
+    )
     idx, _ = _refresh()
     day = _local_date(ts_big)
     costs = cost_cache.daily_costs()[day][fake_home.model]
-    expected = (pricing.calculate_model_cost(fake_home.model, 0, 250_000, 0, 0)
-                + pricing.calculate_model_cost(fake_home.model, 0, 100, 0, 0))
+    expected = pricing.calculate_model_cost(
+        fake_home.model, 0, 250_000, 0, 0
+    ) + pricing.calculate_model_cost(fake_home.model, 0, 100, 0, 0)
     assert costs["cost"] == pytest.approx(expected)
     assert costs["output_tokens"] == 250_100
     # the large message belongs to its own day only
     assert sum(h.tokens for h in idx.hourly(fake_home.today)) == fake_home.today_output_tokens
-    assert idx.day_usage(fake_home.today)[1].tokens_by_model == {fake_home.model: fake_home.today_output_tokens}
+    assert idx.day_usage(fake_home.today)[1].tokens_by_model == {
+        fake_home.model: fake_home.today_output_tokens
+    }
     hour = parser._utc_to_local(ts_big).hour
     assert idx.hourly(day)[hour].tokens == 250_100
     assert idx.hourly(day)[hour].cost == pytest.approx(expected)
@@ -436,8 +535,13 @@ def test_tiered_prices_never_apply_to_sums_of_small_messages(fake_home):
     pricing._pricing_cache[fake_home.model]["cache_read_above_200k"] = 0.6e-6
     ts = "2026-03-04T10:00:00Z"
     path = fake_home.projects / "-home-alice-workspace-myproj" / "sum.jsonl"
-    _write(path, [_entry(f"c{i}", 500, ts, cwd="/home/alice/workspace/myproj", inp=1000, cr=60_000)
-                  for i in range(4)])
+    _write(
+        path,
+        [
+            _entry(f"c{i}", 500, ts, cwd="/home/alice/workspace/myproj", inp=1000, cr=60_000)
+            for i in range(4)
+        ],
+    )
     idx, _ = _refresh()
     per_message = 4 * pricing.calculate_model_cost(fake_home.model, 1000, 500, 60_000, 0)
     assert per_message == pytest.approx(4 * (1000 * 3e-6 + 500 * 15e-6 + 60_000 * 0.3e-6))
@@ -446,10 +550,13 @@ def test_tiered_prices_never_apply_to_sums_of_small_messages(fake_home):
     assert cost_cache.day_cost(day) == pytest.approx(per_message)
     hour = parser._utc_to_local(ts).hour
     assert idx.hourly(day)[hour].cost == pytest.approx(per_message)
-    assert {p.name: p.cost for p in idx.projects()}["myproj"] == pytest.approx(fake_home.today_cost + per_message)
+    assert {p.name: p.cost for p in idx.projects()}["myproj"] == pytest.approx(
+        fake_home.today_cost + per_message
+    )
 
 
 # -- lifecycle ----------------------------------------------------------------
+
 
 def test_schema_version_mismatch_starts_over(fake_home):
     idx, _ = _refresh()
@@ -481,6 +588,7 @@ def test_unwritable_index_location_falls_back_to_memory(fake_home, monkeypatch, 
 
 def test_cost_rebuild_flag(fake_home):
     from click.testing import CliRunner
+
     from claude_multi_usage import cli
 
     _refresh()

@@ -57,3 +57,22 @@ module-root = ""
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "UP",       # pyupgrade
+    "SIM",      # simplify
+]
+
+[tool.ruff.lint.pyupgrade]
+# Keep Optional[X] in annotations: Pydantic and FastAPI evaluate them at
+# runtime, where `X | None` needs Python 3.10.
+keep-runtime-typing = true

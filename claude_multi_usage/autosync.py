@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -48,6 +48,7 @@ def launch_agents_dir() -> Path:
 
 
 # -- change detection ---------------------------------------------------------
+
 
 def fingerprint() -> str:
     """Hash of every local usage file's path, size and mtime, plus the sync settings."""
@@ -90,10 +91,8 @@ def save_state(state: dict) -> None:
             json.dump(state, f, indent=2)
         os.replace(tmp, STATE_FILE)
     except BaseException:
-        try:
+        with suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
 
 
@@ -105,8 +104,14 @@ def record_success(current: str | None = None) -> None:
     """Remember that the current local state has been synced (plain `cmu sync`)."""
     state = load_state()
     now = _now()
-    state.update({"fingerprint": current or fingerprint(), "last_run": now,
-                  "last_sync": now, "last_result": "synced"})
+    state.update(
+        {
+            "fingerprint": current or fingerprint(),
+            "last_run": now,
+            "last_sync": now,
+            "last_result": "synced",
+        }
+    )
     save_state(state)
 
 
@@ -161,6 +166,7 @@ def run(sync: Callable[[], object], force: bool = False) -> str:
 
 # -- scheduler backends -------------------------------------------------------
 
+
 def _command() -> list[str]:
     """How the scheduler invokes cmu.
 
@@ -208,7 +214,8 @@ def install(every_minutes: int = DEFAULT_EVERY_MINUTES, linger: bool = False) ->
     if kind == "launchd":
         return _install_launchd(every_minutes)
     raise RuntimeError(
-        "no supported scheduler on this system (need a running systemd on Linux or launchd on macOS). "
+        "no supported scheduler on this system "
+        "(need a running systemd on Linux or launchd on macOS). "
         f"Schedule this yourself instead: {' '.join(_command())}"
     )
 
@@ -231,16 +238,29 @@ def status() -> dict:
         if info["installed"]:
             res = _run(["systemctl", "--user", "is-enabled", f"{SYSTEMD_UNIT}.timer"], check=False)
             info["enabled"] = res.stdout.strip() or res.stderr.strip()
-            res = _run(["systemctl", "--user", "list-timers", f"{SYSTEMD_UNIT}.timer", "--no-pager",
-                        "--no-legend"], check=False)
+            res = _run(
+                [
+                    "systemctl",
+                    "--user",
+                    "list-timers",
+                    f"{SYSTEMD_UNIT}.timer",
+                    "--no-pager",
+                    "--no-legend",
+                ],
+                check=False,
+            )
             info["timer"] = res.stdout.strip()
     elif kind == "launchd":
         plist = launch_agents_dir() / f"{LAUNCHD_LABEL}.plist"
         info["installed"] = plist.exists()
         if info["installed"]:
             loaded = any(
-                _run(["launchctl", "print", f"{d}/{os.getuid()}/{LAUNCHD_LABEL}"], check=False).returncode == 0
-                for d in ("gui", "user"))
+                _run(
+                    ["launchctl", "print", f"{d}/{os.getuid()}/{LAUNCHD_LABEL}"], check=False
+                ).returncode
+                == 0
+                for d in ("gui", "user")
+            )
             info["enabled"] = "loaded" if loaded else "not loaded"
     return info
 
@@ -291,8 +311,10 @@ def _install_systemd(every_minutes: int, linger: bool) -> list[str]:
         if res.returncode == 0:
             lines[-1] = "lingering enabled: the timer also runs while you are logged out"
         else:
-            lines.append(f"could not enable lingering ({(res.stderr or res.stdout).strip()}); "
-                         "run: sudo loginctl enable-linger $USER")
+            lines.append(
+                f"could not enable lingering ({(res.stderr or res.stdout).strip()}); "
+                "run: sudo loginctl enable-linger $USER"
+            )
     else:
         lines.append("to also run while logged out: loginctl enable-linger (or --linger)")
     return lines
@@ -334,17 +356,19 @@ def _install_launchd(every_minutes: int) -> list[str]:
     plist = agents / f"{LAUNCHD_LABEL}.plist"
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     with open(plist, "wb") as f:
-        plistlib.dump({
-            "Label": LAUNCHD_LABEL,
-            "ProgramArguments": _command(),
-            "WorkingDirectory": str(CACHE_DIR),
-            "StartInterval": every_minutes * 60,
-            "RunAtLoad": True,
-            "StandardOutPath": str(CACHE_DIR / "autosync.log"),
-            "StandardErrorPath": str(CACHE_DIR / "autosync.log"),
-        }, f)
-    lines = [f"installed {plist} (every {every_minutes} min)",
-             f"log: {CACHE_DIR / 'autosync.log'}"]
+        plistlib.dump(
+            {
+                "Label": LAUNCHD_LABEL,
+                "ProgramArguments": _command(),
+                "WorkingDirectory": str(CACHE_DIR),
+                "StartInterval": every_minutes * 60,
+                "RunAtLoad": True,
+                "StandardOutPath": str(CACHE_DIR / "autosync.log"),
+                "StandardErrorPath": str(CACHE_DIR / "autosync.log"),
+            },
+            f,
+        )
+    lines = [f"installed {plist} (every {every_minutes} min)", f"log: {CACHE_DIR / 'autosync.log'}"]
     domain = _launchd_domain()
     _run(["launchctl", "bootout", domain, str(plist)], check=False)
     _wait_for_bootout(domain)
@@ -354,8 +378,10 @@ def _install_launchd(every_minutes: int) -> list[str]:
     else:
         # No session to load into (ssh without a console login): launchd
         # loads LaunchAgents itself at the next login.
-        lines.append(f"not loaded now ({(res.stderr or res.stdout).strip() or 'no login session'}); "
-                     "it starts at the next login")
+        lines.append(
+            f"not loaded now ({(res.stderr or res.stdout).strip() or 'no login session'}); "
+            "it starts at the next login"
+        )
     return lines
 
 
@@ -387,14 +413,17 @@ def _uninstall_launchd() -> list[str]:
 
 
 def describe_status(info: dict) -> list[str]:
-    lines = [f"backend:   {info['backend']}",
-             f"installed: {'yes' if info['installed'] else 'no'}"]
+    lines = [f"backend:   {info['backend']}", f"installed: {'yes' if info['installed'] else 'no'}"]
     if info.get("enabled"):
         lines.append(f"enabled:   {info['enabled']}")
     if info.get("timer"):
         lines.append(f"timer:     {info['timer']}")
     state = info.get("state") or {}
-    for key, label in (("last_run", "last run"), ("last_sync", "last sync"), ("last_result", "result")):
+    for key, label in (
+        ("last_run", "last run"),
+        ("last_sync", "last sync"),
+        ("last_result", "result"),
+    ):
         if state.get(key):
             lines.append(f"{label + ':':<11}{state[key]}")
     return lines

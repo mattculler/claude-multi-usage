@@ -35,10 +35,11 @@ import json
 import sqlite3
 import sys
 from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Optional
 
 from . import parser as _parser
 from .parser import (
@@ -109,10 +110,10 @@ _TABLES = ("owned", "lines", "messages", "files", "meta")
 
 @dataclass
 class RefreshStats:
-    scanned: int = 0      # session files on disk
-    indexed: int = 0      # files read in full
-    appended: int = 0     # files read from their previous offset
-    retired: int = 0      # files that disappeared (rows kept)
+    scanned: int = 0  # session files on disk
+    indexed: int = 0  # files read in full
+    appended: int = 0  # files read from their previous offset
+    retired: int = 0  # files that disappeared (rows kept)
 
 
 def _utc_iso(ts: str) -> str | None:
@@ -164,7 +165,8 @@ class SessionIndex:
         if row is not None and row["value"] != str(SCHEMA_VERSION):
             # An older index: start over rather than guess at a migration.
             self._conn.executescript(
-                "DROP VIEW IF EXISTS owned;" + "".join(f"DROP TABLE IF EXISTS {t};" for t in _TABLES[1:])
+                "DROP VIEW IF EXISTS owned;"
+                + "".join(f"DROP TABLE IF EXISTS {t};" for t in _TABLES[1:])
             )
             self._conn.executescript(_SCHEMA)
             row = None
@@ -193,7 +195,12 @@ class SessionIndex:
                     st = f.stat()
                 except OSError:
                     continue
-                on_disk[str(f)] = (st.st_size, st.st_mtime, project_dir.name, f.parent != project_dir)
+                on_disk[str(f)] = (
+                    st.st_size,
+                    st.st_mtime,
+                    project_dir.name,
+                    f.parent != project_dir,
+                )
         return on_disk
 
     def refresh(self) -> RefreshStats:
@@ -209,7 +216,9 @@ class SessionIndex:
         try:
             known = {
                 row["path"]: row
-                for row in self._conn.execute("SELECT path, size, mtime, offset, tail, gone FROM files")
+                for row in self._conn.execute(
+                    "SELECT path, size, mtime, offset, tail, gone FROM files"
+                )
             }
 
             for path, row in known.items():
@@ -222,9 +231,12 @@ class SessionIndex:
                 if row is not None and not row["gone"]:
                     if row["size"] == size and row["mtime"] == mtime:
                         continue
-                    if size >= row["offset"] and self._prefix_unchanged(path, row["offset"], row["tail"]):
-                        self._index_file(path, size, mtime, project_dir_name, is_subagent,
-                                         offset=row["offset"])
+                    if size >= row["offset"] and self._prefix_unchanged(
+                        path, row["offset"], row["tail"]
+                    ):
+                        self._index_file(
+                            path, size, mtime, project_dir_name, is_subagent, offset=row["offset"]
+                        )
                         stats.appended += 1
                         continue
                 self._forget(path)
@@ -242,8 +254,12 @@ class SessionIndex:
         """Re-read every file on disk; rows of files that are gone are kept."""
         self._conn.execute("BEGIN IMMEDIATE")
         try:
-            self._conn.execute("DELETE FROM messages WHERE path IN (SELECT path FROM files WHERE gone = 0)")
-            self._conn.execute("DELETE FROM lines WHERE path IN (SELECT path FROM files WHERE gone = 0)")
+            self._conn.execute(
+                "DELETE FROM messages WHERE path IN (SELECT path FROM files WHERE gone = 0)"
+            )
+            self._conn.execute(
+                "DELETE FROM lines WHERE path IN (SELECT path FROM files WHERE gone = 0)"
+            )
             self._conn.execute("DELETE FROM files WHERE gone = 0")
             self._conn.commit()
         except BaseException:
@@ -284,11 +300,22 @@ class SessionIndex:
                    WHERE s.project_dir = files.project_dir AND s.cwd IS NOT NULL)"""
         )
 
-    def _index_file(self, path: str, size: int, mtime: float, project_dir_name: str,
-                    is_subagent: bool, offset: int) -> None:
-        existing = self._conn.execute(
-            "SELECT cwd, first_ts, last_ts, ts_source FROM files WHERE path = ?", (path,)
-        ).fetchone() if offset else None
+    def _index_file(
+        self,
+        path: str,
+        size: int,
+        mtime: float,
+        project_dir_name: str,
+        is_subagent: bool,
+        offset: int,
+    ) -> None:
+        existing = (
+            self._conn.execute(
+                "SELECT cwd, first_ts, last_ts, ts_source FROM files WHERE path = ?", (path,)
+            ).fetchone()
+            if offset
+            else None
+        )
         cwd = existing["cwd"] if existing else None
         first_ts = last_ts = None
         if existing and existing["ts_source"] == "log":
@@ -350,9 +377,13 @@ class SessionIndex:
                         content = message.get("content")
                         if isinstance(content, list):
                             counts[2] += sum(
-                                1 for c in content if isinstance(c, dict) and c.get("type") == "tool_use"
+                                1
+                                for c in content
+                                if isinstance(c, dict) and c.get("type") == "tool_use"
                             )
-                        message_rows.append(self._message_row(path, message, key, f"{offset}:{line_no}"))
+                        message_rows.append(
+                            self._message_row(path, message, key, f"{offset}:{line_no}")
+                        )
                     elif entry_type == "progress":
                         # Older Claude Code versions logged subagent responses as
                         # progress entries wrapping a message.
@@ -364,7 +395,9 @@ class SessionIndex:
                         if local is None or not isinstance(message, dict):
                             continue
                         key = (local.strftime("%Y-%m-%d"), local.hour)
-                        message_rows.append(self._message_row(path, message, key, f"{offset}:{line_no}"))
+                        message_rows.append(
+                            self._message_row(path, message, key, f"{offset}:{line_no}")
+                        )
 
                 start = max(0, new_offset - _TAIL_BYTES)
                 f.seek(start)
@@ -375,7 +408,9 @@ class SessionIndex:
         ts_source = "log"
         if first_ts is None:
             # No timestamped entries yet: fall back to the file's mtime until some appear.
-            first_ts = last_ts = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+            first_ts = last_ts = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S"
+            )
             ts_source = "mtime"
 
         project = _repo_name_from_cwd(cwd) if cwd else _project_name_from_dir(project_dir_name)
@@ -389,8 +424,20 @@ class SessionIndex:
                  tail = excluded.tail, gone = 0, cwd = excluded.cwd, project = excluded.project,
                  first_ts = excluded.first_ts, last_ts = excluded.last_ts,
                  ts_source = excluded.ts_source""",
-            (path, size, mtime, new_offset, tail, project_dir_name, int(is_subagent), cwd, project,
-             first_ts, last_ts, ts_source),
+            (
+                path,
+                size,
+                mtime,
+                new_offset,
+                tail,
+                project_dir_name,
+                int(is_subagent),
+                cwd,
+                project,
+                first_ts,
+                last_ts,
+                ts_source,
+            ),
         )
         # Later lines of a streamed message carry the final usage; keep the maximum.
         self._conn.executemany(
@@ -426,15 +473,22 @@ class SessionIndex:
             return v if isinstance(v, int) and not isinstance(v, bool) else 0
 
         return (
-            path, str(msg_id), str(model), key[0], key[1],
-            _int(usage.get("input_tokens")), _int(usage.get("output_tokens")),
-            _int(usage.get("cache_read_input_tokens")), _int(usage.get("cache_creation_input_tokens")),
+            path,
+            str(msg_id),
+            str(model),
+            key[0],
+            key[1],
+            _int(usage.get("input_tokens")),
+            _int(usage.get("output_tokens")),
+            _int(usage.get("cache_read_input_tokens")),
+            _int(usage.get("cache_creation_input_tokens")),
         )
 
     # -- queries ----------------------------------------------------------
 
-    def message_usage(self, date_from: str | None = None, date_to: str | None = None,
-                      by_hour: bool = False) -> Iterator[sqlite3.Row]:
+    def message_usage(
+        self, date_from: str | None = None, date_to: str | None = None, by_hour: bool = False
+    ) -> Iterator[sqlite3.Row]:
         """Token sums per (date[, hour], model) over messages counted once.
 
         Rows with ``big`` = 0 are sums of messages that are each below the
@@ -494,8 +548,13 @@ class SessionIndex:
             if has_pricing:
                 h["cost"] += usage_cost(row)
         return [
-            HourlyUsage(hour=h, message_count=v["messages"], session_count=len(v["sessions"]),
-                        tokens=v["tokens"], cost=v["cost"])
+            HourlyUsage(
+                hour=h,
+                message_count=v["messages"],
+                session_count=len(v["sessions"]),
+                tokens=v["tokens"],
+                cost=v["cost"],
+            )
             for h, v in sorted(hours.items())
         ]
 
@@ -515,14 +574,19 @@ class SessionIndex:
         if row["messages"] == 0 and not tokens:
             return None
         return (
-            DailyActivity(date=date, message_count=row["messages"],
-                          session_count=row["sessions"], tool_call_count=row["tool_calls"]),
+            DailyActivity(
+                date=date,
+                message_count=row["messages"],
+                session_count=row["sessions"],
+                tool_call_count=row["tool_calls"],
+            ),
             DailyModelTokens(date=date, tokens_by_model=tokens),
         )
 
     def projects(self) -> list[ProjectSummary]:
         """Per-repository summaries: sessions, tokens, cost, first/last seen."""
-        from .pricing import TIERED_THRESHOLD as T, get_pricing, usage_cost
+        from .pricing import TIERED_THRESHOLD as T
+        from .pricing import get_pricing, usage_cost
 
         has_pricing = get_pricing() is not None
         summaries: dict[str, ProjectSummary] = {}
@@ -533,8 +597,10 @@ class SessionIndex:
                FROM files GROUP BY project"""
         ):
             summaries[row["project"]] = ProjectSummary(
-                name=row["project"], session_count=row["sessions"],
-                first_seen=_from_utc_iso(row["first_ts"]), last_seen=_from_utc_iso(row["last_ts"]),
+                name=row["project"],
+                session_count=row["sessions"],
+                first_seen=_from_utc_iso(row["first_ts"]),
+                last_seen=_from_utc_iso(row["last_ts"]),
             )
         for row in self._conn.execute(
             """SELECT f.project, o.model,
@@ -575,8 +641,11 @@ def get_index() -> SessionIndex:
     if _instance is None:
         idx = SessionIndex(INDEX_FILE)
         if idx.fallback_reason:
-            print(f"cmu: session index unavailable ({idx.fallback_reason}); "
-                  "reading session files directly this run", file=sys.stderr)
+            print(
+                f"cmu: session index unavailable ({idx.fallback_reason}); "
+                "reading session files directly this run",
+                file=sys.stderr,
+            )
         idx.refresh()
         _instance = idx
     return _instance

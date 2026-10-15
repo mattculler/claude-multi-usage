@@ -9,15 +9,14 @@ Source: https://github.com/BerriAI/litellm
 from __future__ import annotations
 
 import json
-import urllib.request
 import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 LITELLM_PRICING_URL = (
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/"
-    "model_prices_and_context_window.json"
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 )
 
 CACHE_DIR = Path.home() / ".claude-multi-usage"
@@ -60,7 +59,9 @@ def _fetch_litellm_pricing() -> Optional[dict]:
             "input_above_200k": info.get("input_cost_per_token_above_200k_tokens"),
             "output_above_200k": info.get("output_cost_per_token_above_200k_tokens"),
             "cache_read_above_200k": info.get("cache_read_input_token_cost_above_200k_tokens"),
-            "cache_creation_above_200k": info.get("cache_creation_input_token_cost_above_200k_tokens"),
+            "cache_creation_above_200k": info.get(
+                "cache_creation_input_token_cost_above_200k_tokens"
+            ),
         }
 
     return claude_models
@@ -155,8 +156,7 @@ def _match_model(model_id: str) -> Optional[dict]:
     return None
 
 
-def _tiered_cost(tokens: int, base_price: float,
-                 tiered_price: Optional[float] = None) -> float:
+def _tiered_cost(tokens: int, base_price: float, tiered_price: Optional[float] = None) -> float:
     """Apply tiered pricing above the 200K threshold."""
     if tokens <= 0 or base_price is None:
         return 0.0
@@ -199,8 +199,9 @@ def calculate_model_cost(
         _tiered_cost(input_tokens, info.get("input", 0), tier("input_above_200k"))
         + _tiered_cost(output_tokens, info.get("output", 0), tier("output_above_200k"))
         + _tiered_cost(cache_read_tokens, info.get("cache_read", 0), tier("cache_read_above_200k"))
-        + _tiered_cost(cache_creation_tokens, info.get("cache_creation", 0),
-                       tier("cache_creation_above_200k"))
+        + _tiered_cost(
+            cache_creation_tokens, info.get("cache_creation", 0), tier("cache_creation_above_200k")
+        )
     )
     return cost
 
@@ -208,7 +209,11 @@ def calculate_model_cost(
 def usage_cost(row) -> float:
     """Cost of an index usage row: tiered for a single large message, linear for a sum."""
     return calculate_model_cost(
-        row["model"], row["input"], row["output"], row["cache_read"], row["cache_create"],
+        row["model"],
+        row["input"],
+        row["output"],
+        row["cache_read"],
+        row["cache_create"],
         tiered=bool(row["big"]),
     )
 

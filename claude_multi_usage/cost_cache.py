@@ -19,10 +19,17 @@ from .pricing import get_pricing, is_claude_model, usage_cost
 def daily_costs(date_from: str | None = None, date_to: str | None = None) -> dict:
     """Return {date: {model: {cost, output_tokens, input_tokens, cache_read_tokens,
     cache_creation_tokens}}} for Claude models, with every message counted once."""
-    result: dict = defaultdict(lambda: defaultdict(lambda: {
-        "cost": 0.0, "output_tokens": 0, "input_tokens": 0,
-        "cache_read_tokens": 0, "cache_creation_tokens": 0,
-    }))
+    result: dict = defaultdict(
+        lambda: defaultdict(
+            lambda: {
+                "cost": 0.0,
+                "output_tokens": 0,
+                "input_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_creation_tokens": 0,
+            }
+        )
+    )
     for row in get_index().message_usage(date_from, date_to):
         if not is_claude_model(row["model"]):
             continue

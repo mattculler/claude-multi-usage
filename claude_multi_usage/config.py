@@ -106,5 +106,3 @@ def set_alias(alias: str | None) -> None:
     config = load_config()
     config["alias"] = alias if alias else None
     save_config(config)
-
-

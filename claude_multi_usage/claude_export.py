@@ -52,6 +52,7 @@ class ExportError(ValueError):
 
 # -- loading --------------------------------------------------------------------
 
+
 def load_export(path: Path | str) -> dict[str, Any]:
     """Return {"conversations": [...], "projects": [...], "users": [...]}.
 
@@ -96,7 +97,9 @@ def _load_from_zip(path: Path) -> dict[str, Any]:
             raise ExportError(f"no conversations.json found in {path}")
         if len(found) > 1:
             listing = "\n  ".join(i.filename for i in found)
-            raise ExportError(f"several exports found in {path}; extract and point at one of them:\n  {listing}")
+            raise ExportError(
+                f"several exports found in {path}; extract and point at one of them:\n  {listing}"
+            )
         folder = posixpath.dirname(found[0].filename)
         by_name = {i.filename: i for i in zf.infolist()}
 
@@ -136,6 +139,7 @@ def _assemble(conversations: Any, projects: Any, users: Any) -> dict[str, Any]:
 
 
 # -- estimation -----------------------------------------------------------------
+
 
 def estimate_tokens(text: str | None) -> int:
     if not text:
@@ -213,6 +217,7 @@ def _local_dt(value: Any) -> Optional[datetime]:
 
 # -- summary --------------------------------------------------------------------
 
+
 def account_id(export: dict[str, Any]) -> Optional[str]:
     for conv in export["conversations"]:
         acct = conv.get("account")
@@ -239,8 +244,9 @@ def _project_of(conv: dict, names: dict) -> str:
     return names.get(link) or UNGROUPED_PROJECT
 
 
-def summarize_export(export: dict[str, Any], keys: list[str], alias: str | None = None,
-                     now: datetime | None = None) -> dict[str, Any]:
+def summarize_export(
+    export: dict[str, Any], keys: list[str], alias: str | None = None, now: datetime | None = None
+) -> dict[str, Any]:
     """Build a sync payload (see ``cmu sync``) for the account's pseudo-device.
 
     Days are bucketed in the local time zone of the machine running the
@@ -249,7 +255,8 @@ def summarize_export(export: dict[str, Any], keys: list[str], alias: str | None 
     conversations = export["conversations"]
     project_names = {
         p.get("uuid"): p.get("name") or "(unnamed project)"
-        for p in export.get("projects") or [] if isinstance(p, dict) and p.get("uuid")
+        for p in export.get("projects") or []
+        if isinstance(p, dict) and p.get("uuid")
     }
 
     day_messages: dict[str, int] = defaultdict(int)
@@ -296,8 +303,17 @@ def summarize_export(export: dict[str, Any], keys: list[str], alias: str | None 
             first_seen = conv_first
 
         name = _project_of(conv, project_names)
-        entry = projects.setdefault(name, {"name": name, "session_count": 0, "output_tokens": 0,
-                                           "input_tokens": 0, "first_seen": None, "last_seen": None})
+        entry = projects.setdefault(
+            name,
+            {
+                "name": name,
+                "session_count": 0,
+                "output_tokens": 0,
+                "input_tokens": 0,
+                "first_seen": None,
+                "last_seen": None,
+            },
+        )
         entry["session_count"] += 1
         entry["output_tokens"] += conv_out
         entry["input_tokens"] += conv_in
@@ -320,16 +336,27 @@ def summarize_export(export: dict[str, Any], keys: list[str], alias: str | None 
         "total_sessions": total_sessions,
         "total_messages": total_messages,
         "first_session_date": first_seen.isoformat() if first_seen else None,
-        "model_usage": [{
-            "model": ESTIMATED_MODEL, "input_tokens": total_in, "output_tokens": total_out,
-            "cache_read_tokens": 0, "cache_creation_tokens": 0,
-        }] if total_messages else [],
+        "model_usage": [
+            {
+                "model": ESTIMATED_MODEL,
+                "input_tokens": total_in,
+                "output_tokens": total_out,
+                "cache_read_tokens": 0,
+                "cache_creation_tokens": 0,
+            }
+        ]
+        if total_messages
+        else [],
         "hour_counts": {str(h): n for h, n in sorted(hour_counts.items())},
         "today_hourly_date": None,
         "today_hourly": [],
         "daily_activity": [
-            {"date": d, "message_count": day_messages[d],
-             "session_count": len(day_conversations[d]), "tool_call_count": 0}
+            {
+                "date": d,
+                "message_count": day_messages[d],
+                "session_count": len(day_conversations[d]),
+                "tool_call_count": 0,
+            }
             for d in sorted(day_messages)
         ],
         "daily_model_tokens": [
@@ -343,7 +370,11 @@ def summarize_export(export: dict[str, Any], keys: list[str], alias: str | None 
 def describe(payload: dict[str, Any]) -> list[tuple[str, str]]:
     """Human-readable summary rows for a payload built by summarize_export."""
     days = [d["date"] for d in payload["daily_activity"]]
-    usage = payload["model_usage"][0] if payload["model_usage"] else {"input_tokens": 0, "output_tokens": 0}
+    usage = (
+        payload["model_usage"][0]
+        if payload["model_usage"]
+        else {"input_tokens": 0, "output_tokens": 0}
+    )
     return [
         ("Device", f"{payload['alias']} ({payload['hostname']})"),
         ("Conversations", f"{payload['total_sessions']:,}"),

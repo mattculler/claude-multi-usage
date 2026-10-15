@@ -34,10 +34,31 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 REMOTE_BASE = "~/.local/share/cmu"
 UV_INSTALL_URL = "https://astral.sh/uv/install.sh"
 TOOL_NAME = "claude-multi-usage"
-_EXCLUDE_DIRS = {".git", ".venv", "venv", "build", "dist", "__pycache__", ".pytest_cache",
-                 ".ruff_cache", ".claude"}
-_EXCLUDE_SUFFIXES = (".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3", ".egg-info", ".pyc",
-                     ".zip", ".tar", ".tgz", ".gz", ".log")
+_EXCLUDE_DIRS = {
+    ".git",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".claude",
+}
+_EXCLUDE_SUFFIXES = (
+    ".db",
+    ".db-wal",
+    ".db-shm",
+    ".sqlite",
+    ".sqlite3",
+    ".egg-info",
+    ".pyc",
+    ".zip",
+    ".tar",
+    ".tgz",
+    ".gz",
+    ".log",
+)
 _EXCLUDE_PREFIXES = (".env",)
 
 
@@ -67,9 +88,7 @@ def _wanted(rel: Path) -> bool:
     if any(p in _EXCLUDE_DIRS or p.endswith(".egg-info") for p in parts):
         return False
     name = rel.name
-    if name.endswith(_EXCLUDE_SUFFIXES) or name.startswith(_EXCLUDE_PREFIXES):
-        return False
-    return True
+    return not (name.endswith(_EXCLUDE_SUFFIXES) or name.startswith(_EXCLUDE_PREFIXES))
 
 
 def checkout_files(checkout: Path) -> list[Path]:
@@ -77,8 +96,11 @@ def checkout_files(checkout: Path) -> list[Path]:
     walk of the tree. Secrets-shaped and build files are never included."""
     files: list[Path] = []
     if (checkout / ".git").exists() and shutil.which("git"):
-        res = subprocess.run(["git", "-C", str(checkout), "ls-files", "-z", "--cached"],
-                             capture_output=True, check=False)
+        res = subprocess.run(
+            ["git", "-C", str(checkout), "ls-files", "-z", "--cached"],
+            capture_output=True,
+            check=False,
+        )
         if res.returncode == 0:
             for raw in res.stdout.split(b"\0"):
                 if raw:
@@ -109,21 +131,27 @@ def _find_uv() -> str:
     locations are tried explicitly (uv's installer, Homebrew, /usr/local).
     """
     return """UV=""
-for candidate in "$(command -v uv 2>/dev/null || true)" "$HOME/.local/bin/uv" /opt/homebrew/bin/uv /usr/local/bin/uv; do
+for candidate in "$(command -v uv 2>/dev/null || true)" "$HOME/.local/bin/uv" \\
+        /opt/homebrew/bin/uv /usr/local/bin/uv; do
     if [ -n "$candidate" ] && [ -x "$candidate" ]; then UV="$candidate"; break; fi
 done"""
 
 
-def install_script(source_is_tarball: bool, requirement: Optional[str], server_url: str,
-                   keys: list[tuple[str, str]], alias: Optional[str], every_minutes: int,
-                   python: Optional[str] = None, linger: bool = False) -> str:
+def install_script(
+    source_is_tarball: bool,
+    requirement: Optional[str],
+    server_url: str,
+    keys: list[tuple[str, str]],
+    alias: Optional[str],
+    every_minutes: int,
+    python: Optional[str] = None,
+    linger: bool = False,
+) -> str:
     """The bash script executed on the remote host."""
     q = shlex.quote
     install_from = '"$BASE/src"' if source_is_tarball else q(requirement or "")
     python_flag = f" --python {q(python)}" if python else ""
-    key_lines = "\n".join(
-        f'"$CMU" config key add {q(k)} {q(desc)}' for k, desc in keys
-    )
+    key_lines = "\n".join(f'"$CMU" config key add {q(k)} {q(desc)}' for k, desc in keys)
     alias_line = f'"$CMU" config alias {q(alias)}' if alias else ""
     linger_flag = " --linger" if linger else ""
     return f"""set -euo pipefail
@@ -176,7 +204,7 @@ if [ -n "$UV" ]; then
     UV_TOOL_BIN_DIR="$BASE/bin" "$UV" tool uninstall {TOOL_NAME} >/dev/null 2>&1 || true
 fi
 rm -rf "$BASE"
-echo "==> $(hostname): removed cmu and its autosync job (config in ~/.claude-multi-usage and uv kept)"
+echo "==> $(hostname): removed cmu and its autosync job (config and uv kept)"
 """
 
 
@@ -185,10 +213,18 @@ def _ssh(host: str, args: list[str], input_bytes: bytes, ssh_options: list[str])
     subprocess.run(cmd, input=input_bytes, check=True)
 
 
-def install(host: str, server_url: str, keys: list[tuple[str, str]], every_minutes: int,
-            alias: Optional[str] = None, source: Optional[str] = None,
-            python: Optional[str] = None, ssh_options: Optional[list[str]] = None,
-            linger: bool = False, run=_ssh) -> list[str]:
+def install(
+    host: str,
+    server_url: str,
+    keys: list[tuple[str, str]],
+    every_minutes: int,
+    alias: Optional[str] = None,
+    source: Optional[str] = None,
+    python: Optional[str] = None,
+    ssh_options: Optional[list[str]] = None,
+    linger: bool = False,
+    run=_ssh,
+) -> list[str]:
     """Install cmu on ``host``. Returns lines describing what was done."""
     ssh_options = ssh_options or []
     source = source or default_source()
@@ -196,12 +232,16 @@ def install(host: str, server_url: str, keys: list[tuple[str, str]], every_minut
     lines = []
     if src_path.is_dir() and (src_path / "pyproject.toml").exists():
         tarball = make_tarball(src_path)
-        unpack = f"rm -rf {REMOTE_BASE}/src && mkdir -p {REMOTE_BASE} && tar -xzf - -C {REMOTE_BASE}"
+        unpack = (
+            f"rm -rf {REMOTE_BASE}/src && mkdir -p {REMOTE_BASE} && tar -xzf - -C {REMOTE_BASE}"
+        )
         run(host, ["bash", "-c", shlex.quote(unpack)], tarball, ssh_options)
         script = install_script(True, None, server_url, keys, alias, every_minutes, python, linger)
         lines.append(f"sent this checkout ({len(tarball) // 1024} KB) to {host}:{REMOTE_BASE}/src")
     else:
-        script = install_script(False, source, server_url, keys, alias, every_minutes, python, linger)
+        script = install_script(
+            False, source, server_url, keys, alias, every_minutes, python, linger
+        )
         lines.append(f"{host} installs from {source}")
     run(host, ["bash", "-s"], script.encode(), ssh_options)
     lines.append(f"cmu installed on {host} with autosync every {every_minutes} min")

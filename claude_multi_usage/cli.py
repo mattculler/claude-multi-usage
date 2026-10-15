@@ -6,11 +6,18 @@ from datetime import datetime
 
 import click
 
-from .parser import load_usage_data, parse_today_usage, HourlyUsage, UsageData
-from .dashboard import render_dashboard, render_multi_device_dashboard, make_projects_table, make_models_table, make_today_hourly_chart, Console, format_tokens
 from .cost_cache import get_costs
+from .dashboard import (
+    Console,
+    format_tokens,
+    make_models_table,
+    make_projects_table,
+    make_today_hourly_chart,
+    render_dashboard,
+    render_multi_device_dashboard,
+)
+from .parser import HourlyUsage, UsageData, load_usage_data, parse_today_usage
 from .pricing import format_cost
-
 
 CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
 
@@ -22,7 +29,7 @@ def _validate_date(ctx, param, value):
     try:
         datetime.strptime(value, "%Y-%m-%d")
     except ValueError:
-        raise click.BadParameter("expected a date in YYYY-MM-DD format")
+        raise click.BadParameter("expected a date in YYYY-MM-DD format") from None
     return value
 
 
@@ -63,25 +70,33 @@ def _build_device_usage_data(device: dict) -> UsageData:
             )
             for m in device.get("model_usage", [])
         ],
-        projects=sorted([
-            ProjectSummary(
-                name=p["name"],
-                session_count=p["session_count"],
-                output_tokens=p.get("output_tokens", 0),
-                input_tokens=p.get("input_tokens", 0),
-                first_seen=_parse_dt(p.get("first_seen")),
-                last_seen=_parse_dt(p.get("last_seen")),
-            )
-            for p in device.get("projects", [])
-        ], key=lambda p: p.output_tokens, reverse=True),
+        projects=sorted(
+            [
+                ProjectSummary(
+                    name=p["name"],
+                    session_count=p["session_count"],
+                    output_tokens=p.get("output_tokens", 0),
+                    input_tokens=p.get("input_tokens", 0),
+                    first_seen=_parse_dt(p.get("first_seen")),
+                    last_seen=_parse_dt(p.get("last_seen")),
+                )
+                for p in device.get("projects", [])
+            ],
+            key=lambda p: p.output_tokens,
+            reverse=True,
+        ),
         hour_counts={int(k): v for k, v in device.get("hour_counts", {}).items()},
         total_sessions=device.get("total_sessions", 0),
         total_messages=device.get("total_messages", 0),
         first_session_date=device.get("first_session_date"),
         alias=device.get("alias"),
         today_hourly=[
-            HourlyUsage(hour=h["hour"], message_count=h["message_count"],
-                        session_count=h["session_count"], tokens=h["tokens"])
+            HourlyUsage(
+                hour=h["hour"],
+                message_count=h["message_count"],
+                session_count=h["session_count"],
+                tokens=h["tokens"],
+            )
             for h in device.get("today_hourly", [])
         ],
         today_hourly_date=device.get("today_hourly_date"),
@@ -174,26 +189,41 @@ def _merge_devices_usage(devices: list[dict]) -> UsageData:
         except (ValueError, AttributeError):
             return None
 
-    hostname_label = " + ".join(sorted(hostnames)) if len(hostnames) <= 3 else f"{len(hostnames)} devices"
+    hostname_label = (
+        " + ".join(sorted(hostnames)) if len(hostnames) <= 3 else f"{len(hostnames)} devices"
+    )
 
     return UsageData(
         hostname=hostname_label,
         daily_activity=sorted(all_activity.values(), key=lambda a: a.date),
         daily_model_tokens=[
-            DailyModelTokens(date=d, tokens_by_model=t)
-            for d, t in sorted(all_tokens.items())
+            DailyModelTokens(date=d, tokens_by_model=t) for d, t in sorted(all_tokens.items())
         ],
         model_usage=[
-            ModelUsage(model=m, input_tokens=v[0], output_tokens=v[1],
-                       cache_read_tokens=v[2], cache_creation_tokens=v[3])
+            ModelUsage(
+                model=m,
+                input_tokens=v[0],
+                output_tokens=v[1],
+                cache_read_tokens=v[2],
+                cache_creation_tokens=v[3],
+            )
             for m, v in all_model_usage.items()
         ],
-        projects=sorted([
-            ProjectSummary(name=n, session_count=v[0], output_tokens=v[1],
-                           input_tokens=v[2], first_seen=_parse_dt(v[3]),
-                           last_seen=_parse_dt(v[4]))
-            for n, v in all_projects.items()
-        ], key=lambda p: p.output_tokens, reverse=True),
+        projects=sorted(
+            [
+                ProjectSummary(
+                    name=n,
+                    session_count=v[0],
+                    output_tokens=v[1],
+                    input_tokens=v[2],
+                    first_seen=_parse_dt(v[3]),
+                    last_seen=_parse_dt(v[4]),
+                )
+                for n, v in all_projects.items()
+            ],
+            key=lambda p: p.output_tokens,
+            reverse=True,
+        ),
         hour_counts=all_hour_counts,
         total_sessions=total_sessions,
         total_messages=total_messages,
@@ -204,10 +234,11 @@ def _merge_devices_usage(devices: list[dict]) -> UsageData:
 def _fetch_all_devices(key: str | None = None) -> list[dict]:
     """Fetch raw device data list from the sync server."""
     import json
-    import urllib.request
     import urllib.error
     import urllib.parse
-    from .config import get_server_url, get_keys
+    import urllib.request
+
+    from .config import get_keys, get_server_url
 
     console = Console()
     server_url = get_server_url()
@@ -240,7 +271,7 @@ def _fetch_all_devices(key: str | None = None) -> list[dict]:
                     all_devices[d["hostname"]] = d
         except urllib.error.URLError as e:
             console.print(f"[red]Failed to fetch from server:[/red] {e}")
-            raise SystemExit(1)
+            raise SystemExit(1) from None
 
     if not all_devices:
         console.print("[dim]No device data on server.[/dim]")
@@ -287,12 +318,30 @@ def main(ctx):
 
 
 @main.command(context_settings=CONTEXT_SETTINGS)
-@click.option("--days", "-d", default=14, show_default=True, type=click.IntRange(min=1),
-              help="Number of recent days to display in the chart.")
-@click.option("--from", "date_from", default=None, metavar="YYYY-MM-DD",
-              callback=_validate_date, help="Start date for the chart range.")
-@click.option("--to", "date_to", default=None, metavar="YYYY-MM-DD",
-              callback=_validate_date, help="End date for the chart range.")
+@click.option(
+    "--days",
+    "-d",
+    default=14,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Number of recent days to display in the chart.",
+)
+@click.option(
+    "--from",
+    "date_from",
+    default=None,
+    metavar="YYYY-MM-DD",
+    callback=_validate_date,
+    help="Start date for the chart range.",
+)
+@click.option(
+    "--to",
+    "date_to",
+    default=None,
+    metavar="YYYY-MM-DD",
+    callback=_validate_date,
+    help="End date for the chart range.",
+)
 def dashboard(days: int, date_from: str, date_to: str):
     """Show the full usage dashboard.
 
@@ -322,8 +371,8 @@ def today():
     \b
     Shows: sessions, messages, tool calls, tokens by model.
     """
-    from rich.table import Table
     from rich.panel import Panel
+    from rich.table import Table
 
     console = Console()
     data = load_usage_data()
@@ -359,6 +408,7 @@ def today():
     # Today's cost
     from .cost_cache import day_cost
     from .pricing import get_pricing
+
     if get_pricing() is not None:
         table.add_row("Cost", f"[bold yellow]{format_cost(day_cost(today_str))}[/bold yellow]")
 
@@ -394,8 +444,7 @@ def hourly():
 
 
 @main.command(context_settings=CONTEXT_SETTINGS)
-@click.option("--limit", "-n", default=20, show_default=True,
-              help="Number of projects to display.")
+@click.option("--limit", "-n", default=20, show_default=True, help="Number of projects to display.")
 def projects(limit: int):
     """Show project usage breakdown sorted by output tokens.
 
@@ -427,10 +476,13 @@ def models():
 
 
 @main.command(context_settings=CONTEXT_SETTINGS)
-@click.option("--rebuild", is_flag=True,
-              help="Re-read every session file on disk (needed after changing the "
-                   "system time zone). History of transcripts Claude Code has since "
-                   "deleted is kept.")
+@click.option(
+    "--rebuild",
+    is_flag=True,
+    help="Re-read every session file on disk (needed after changing the "
+    "system time zone). History of transcripts Claude Code has since "
+    "deleted is kept.",
+)
 def cost(rebuild: bool):
     """Show monthly cost breakdown.
 
@@ -446,14 +498,19 @@ def cost(rebuild: bool):
     Falls back to last cached pricing if network is unavailable.
     """
     from collections import defaultdict
-    from rich.table import Table
+
     from rich.panel import Panel
+    from rich.table import Table
 
     console = Console()
     if rebuild:
         from .index import rebuild as rebuild_index
+
         stats = rebuild_index()
-        console.print(f"[dim]Session index rebuilt: {stats.file_count(include_gone=False)} files re-read.[/dim]")
+        console.print(
+            f"[dim]Session index rebuilt: {stats.file_count(include_gone=False)} "
+            "files re-read.[/dim]"
+        )
     costs = get_costs()
     if costs is None:
         console.print()
@@ -497,18 +554,33 @@ def cost(rebuild: bool):
 
 
 @main.command(context_settings=CONTEXT_SETTINGS)
-@click.option("--days", "-d", default=14, show_default=True, type=click.IntRange(min=1),
-              help="Number of recent days to display in the chart.")
-@click.option("--from", "date_from", default=None, metavar="YYYY-MM-DD",
-              callback=_validate_date, help="Start date for the chart range.")
-@click.option("--to", "date_to", default=None, metavar="YYYY-MM-DD",
-              callback=_validate_date, help="End date for the chart range.")
-@click.option("--merged", is_flag=True,
-              help="Merge all devices into one view.")
-@click.option("--key", "filter_key", default=None, metavar="KEY",
-              help="Filter by specific key.")
-def diff(days: int, date_from: str, date_to: str, merged: bool,
-         filter_key: str):
+@click.option(
+    "--days",
+    "-d",
+    default=14,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Number of recent days to display in the chart.",
+)
+@click.option(
+    "--from",
+    "date_from",
+    default=None,
+    metavar="YYYY-MM-DD",
+    callback=_validate_date,
+    help="Start date for the chart range.",
+)
+@click.option(
+    "--to",
+    "date_to",
+    default=None,
+    metavar="YYYY-MM-DD",
+    callback=_validate_date,
+    help="End date for the chart range.",
+)
+@click.option("--merged", is_flag=True, help="Merge all devices into one view.")
+@click.option("--key", "filter_key", default=None, metavar="KEY", help="Filter by specific key.")
+def diff(days: int, date_from: str, date_to: str, merged: bool, filter_key: str):
     """Show multi-device usage from the sync server.
 
     \b
@@ -664,8 +736,9 @@ def config_key_remove(key: str):
 @config_key.command(name="list")
 def config_key_list():
     """List all registered keys."""
-    from .config import get_keys
     from rich.table import Table
+
+    from .config import get_keys
 
     console = Console()
     keys = get_keys()
@@ -689,8 +762,11 @@ def config_key_list():
 
 @main.command(context_settings=CONTEXT_SETTINGS)
 @click.option("--quiet", "-q", is_flag=True, help="Suppress output.")
-@click.option("--if-changed", is_flag=True,
-              help="Only sync when the local usage files changed since the last sync.")
+@click.option(
+    "--if-changed",
+    is_flag=True,
+    help="Only sync when the local usage files changed since the last sync.",
+)
 def sync(quiet: bool, if_changed: bool):
     """Sync local usage data to the central server.
 
@@ -712,25 +788,33 @@ def sync(quiet: bool, if_changed: bool):
         if if_changed:
             result = autosync.run(sync_now)
             if not quiet:
-                console.print("[dim]Nothing changed since the last sync.[/dim]" if result == "unchanged"
-                              else "[green]Synced.[/green]")
+                console.print(
+                    "[dim]Nothing changed since the last sync.[/dim]"
+                    if result == "unchanged"
+                    else "[green]Synced.[/green]"
+                )
             return
         payload = sync_now()
         autosync.record_success()
     except SyncError as e:
         if not quiet:
             console.print(f"[red]{e}[/red]")
-        raise SystemExit(1)
+        raise SystemExit(1) from None
     if not quiet:
         from .config import get_server_url
-        console.print(f"[green]Synced to {get_server_url()}[/green] "
-                      f"({payload['hostname']}, keys: {', '.join(payload['keys'])})")
+
+        console.print(
+            f"[green]Synced to {get_server_url()}[/green] "
+            f"({payload['hostname']}, keys: {', '.join(payload['keys'])})"
+        )
 
 
 @main.command("import-claude-export", context_settings=CONTEXT_SETTINGS)
 @click.argument("path", type=click.Path(exists=True))
 @click.option("--alias", default=None, help="Display alias for the claude.ai pseudo-device.")
-@click.option("--dry-run", is_flag=True, help="Show what would be sent without contacting the server.")
+@click.option(
+    "--dry-run", is_flag=True, help="Show what would be sent without contacting the server."
+)
 def import_claude_export(path: str, alias: str, dry_run: bool):
     """Import a claude.ai data export as the device "claude.ai".
 
@@ -749,6 +833,7 @@ def import_claude_export(path: str, alias: str, dry_run: bool):
     """
     from rich.panel import Panel
     from rich.table import Table
+
     from .claude_export import ExportError, describe, load_export, summarize_export
     from .sync_client import SyncError, post_payload, require_server_config
 
@@ -757,7 +842,7 @@ def import_claude_export(path: str, alias: str, dry_run: bool):
         export = load_export(path)
     except ExportError as e:
         console.print(f"[red]{e}[/red]")
-        raise SystemExit(1)
+        raise SystemExit(1) from None
 
     server_url, key_values = None, []
     if not dry_run:
@@ -765,7 +850,7 @@ def import_claude_export(path: str, alias: str, dry_run: bool):
             server_url, key_entries = require_server_config()
         except SyncError as e:
             console.print(f"[red]{e}[/red]")
-            raise SystemExit(1)
+            raise SystemExit(1) from None
         key_values = [k["key"] for k in key_entries]
 
     payload = summarize_export(export, key_values, alias=alias)
@@ -784,9 +869,11 @@ def import_claude_export(path: str, alias: str, dry_run: bool):
         post_payload(server_url, payload)
     except SyncError as e:
         console.print(f"[red]{e}[/red]")
-        raise SystemExit(1)
-    console.print(f"[green]Imported to {server_url}[/green] as device '{payload['hostname']}' "
-                  f"(keys: {', '.join(key_values)})")
+        raise SystemExit(1) from None
+    console.print(
+        f"[green]Imported to {server_url}[/green] as device '{payload['hostname']}' "
+        f"(keys: {', '.join(key_values)})"
+    )
     console.print()
 
 
@@ -811,13 +898,23 @@ def autosync_group():
 
 
 @autosync_group.command("install")
-@click.option("--every", default=15, type=click.IntRange(min=1), show_default=True, metavar="MINUTES",
-              help="How often to check for changes.")
-@click.option("--linger", is_flag=True,
-              help="Linux: also run while you are logged out (loginctl enable-linger).")
+@click.option(
+    "--every",
+    default=15,
+    type=click.IntRange(min=1),
+    show_default=True,
+    metavar="MINUTES",
+    help="How often to check for changes.",
+)
+@click.option(
+    "--linger",
+    is_flag=True,
+    help="Linux: also run while you are logged out (loginctl enable-linger).",
+)
 def autosync_install(every: int, linger: bool):
     """Install and start the periodic sync job for this user."""
     import subprocess
+
     from . import autosync
     from .sync_client import SyncError, require_server_config, sync_now
 
@@ -827,10 +924,12 @@ def autosync_install(every: int, linger: bool):
         lines = autosync.install(every, linger)
     except (SyncError, RuntimeError, ValueError) as e:
         console.print(f"[red]{e}[/red]")
-        raise SystemExit(1)
+        raise SystemExit(1) from None
     except subprocess.CalledProcessError as e:
-        console.print(f"[red]{' '.join(e.cmd)} failed:[/red] {(e.stderr or e.stdout or '').strip()}")
-        raise SystemExit(1)
+        console.print(
+            f"[red]{' '.join(e.cmd)} failed:[/red] {(e.stderr or e.stdout or '').strip()}"
+        )
+        raise SystemExit(1) from None
     for line in lines:
         console.print(line)
     try:
@@ -872,7 +971,7 @@ def autosync_run(force: bool, quiet: bool):
         result = autosync.run(sync_now, force=force)
     except SyncError as e:
         console.print(f"[red]{e}[/red]")
-        raise SystemExit(1)
+        raise SystemExit(1) from None
     if result == "synced":
         console.print(f"[green]Synced at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/green]")
     elif not quiet:
@@ -900,68 +999,140 @@ def remote_group():
 
 @remote_group.command("install")
 @click.argument("host")
-@click.option("--every", default=15, type=click.IntRange(min=1), show_default=True, metavar="MINUTES",
-              help="Autosync interval on the remote host.")
-@click.option("--server", "server_url", default=None, metavar="URL",
-              help="Sync server URL (default: this machine's).")
-@click.option("--key", "key_values", multiple=True, metavar="KEY",
-              help="Sync key, repeatable (default: this machine's keys).")
+@click.option(
+    "--every",
+    default=15,
+    type=click.IntRange(min=1),
+    show_default=True,
+    metavar="MINUTES",
+    help="Autosync interval on the remote host.",
+)
+@click.option(
+    "--server",
+    "server_url",
+    default=None,
+    metavar="URL",
+    help="Sync server URL (default: this machine's).",
+)
+@click.option(
+    "--key",
+    "key_values",
+    multiple=True,
+    metavar="KEY",
+    help="Sync key, repeatable (default: this machine's keys).",
+)
 @click.option("--alias", default=None, help="Display alias for the remote machine.")
-@click.option("--from", "source", default=None, metavar="PATH|REQUIREMENT",
-              help="Install cmu from a source checkout (sent over ssh) or a requirement such as "
-                   "git+https://... (default: this checkout when run from one, else the repository URL).")
-@click.option("--python", default=None, metavar="VERSION|PATH",
-              help="Python for uv to use on the remote, e.g. 3.12 (default: uv's choice, "
-                   "downloaded if needed).")
-@click.option("--ssh-option", "ssh_options", multiple=True, metavar="OPT",
-              help='Extra ssh option, repeatable, e.g. "-o StrictHostKeyChecking=accept-new".')
-@click.option("--linger", is_flag=True,
-              help="Linux remote: run the job while logged out too (loginctl enable-linger).")
-def remote_install(host: str, every: int, server_url: str, key_values: tuple, alias: str,
-                   source: str, python: str, ssh_options: tuple, linger: bool):
+@click.option(
+    "--from",
+    "source",
+    default=None,
+    metavar="PATH|REQUIREMENT",
+    help="Install cmu from a source checkout (sent over ssh) or a requirement such as "
+    "git+https://... (default: this checkout when run from one, else the repository URL).",
+)
+@click.option(
+    "--python",
+    default=None,
+    metavar="VERSION|PATH",
+    help="Python for uv to use on the remote, e.g. 3.12 (default: uv's choice, "
+    "downloaded if needed).",
+)
+@click.option(
+    "--ssh-option",
+    "ssh_options",
+    multiple=True,
+    metavar="OPT",
+    help='Extra ssh option, repeatable, e.g. "-o StrictHostKeyChecking=accept-new".',
+)
+@click.option(
+    "--linger",
+    is_flag=True,
+    help="Linux remote: run the job while logged out too (loginctl enable-linger).",
+)
+def remote_install(
+    host: str,
+    every: int,
+    server_url: str,
+    key_values: tuple,
+    alias: str,
+    source: str,
+    python: str,
+    ssh_options: tuple,
+    linger: bool,
+):
     """Install cmu and its autosync job on HOST (an ssh destination)."""
     import shlex
     import subprocess
     from urllib.parse import urlparse
+
     from . import remote
     from .config import get_keys, get_server_url
 
     console = Console()
     server_url = server_url or get_server_url()
     if not server_url:
-        console.print("[red]No server URL: pass --server or run `cmu config server <url>` here first.[/red]")
+        console.print(
+            "[red]No server URL: pass --server or run `cmu config server <url>` here first.[/red]"
+        )
         raise SystemExit(1)
     if (urlparse(server_url).hostname or "") in ("localhost", "127.0.0.1", "::1"):
-        console.print(f"[yellow]Warning:[/yellow] {server_url} points at this machine; from {host} "
-                      "that address is the remote itself. Pass --server with an address it can reach.")
-    keys = [(k, "") for k in key_values] or [(k["key"], k.get("description", "")) for k in get_keys()]
+        console.print(
+            f"[yellow]Warning:[/yellow] {server_url} points at this machine; from {host} "
+            "that address is the remote itself. Pass --server with an address it can reach."
+        )
+    keys = [(k, "") for k in key_values] or [
+        (k["key"], k.get("description", "")) for k in get_keys()
+    ]
     if not keys:
-        console.print("[red]No keys: pass --key or run `cmu config key add <key>` here first.[/red]")
+        console.print(
+            "[red]No keys: pass --key or run `cmu config key add <key>` here first.[/red]"
+        )
         raise SystemExit(1)
     opts = [o for group in ssh_options for o in shlex.split(group)]
     try:
-        lines = remote.install(host, server_url, keys, every, alias=alias, source=source,
-                               python=python, ssh_options=opts, linger=linger)
+        lines = remote.install(
+            host,
+            server_url,
+            keys,
+            every,
+            alias=alias,
+            source=source,
+            python=python,
+            ssh_options=opts,
+            linger=linger,
+        )
     except subprocess.CalledProcessError as e:
         if e.returncode == 255:
-            console.print(f"[red]ssh to {host} failed (exit 255): check the host name, keys and network.[/red]")
+            console.print(
+                f"[red]ssh to {host} failed (exit 255): "
+                "check the host name, keys and network.[/red]"
+            )
         else:
-            console.print(f"[red]Setup on {host} failed (exit {e.returncode}); see the output above.[/red]")
-        raise SystemExit(1)
+            console.print(
+                f"[red]Setup on {host} failed (exit {e.returncode}); see the output above.[/red]"
+            )
+        raise SystemExit(1) from None
     except (RuntimeError, OSError) as e:
         console.print(f"[red]{e}[/red]")
-        raise SystemExit(1)
+        raise SystemExit(1) from None
     for line in lines:
         console.print(f"[green]{line}[/green]")
 
 
 @remote_group.command("uninstall")
 @click.argument("host")
-@click.option("--ssh-option", "ssh_options", multiple=True, metavar="OPT", help="Extra ssh option, repeatable.")
+@click.option(
+    "--ssh-option",
+    "ssh_options",
+    multiple=True,
+    metavar="OPT",
+    help="Extra ssh option, repeatable.",
+)
 def remote_uninstall(host: str, ssh_options: tuple):
     """Remove cmu and its autosync job from HOST."""
     import shlex
     import subprocess
+
     from . import remote
 
     console = Console()
@@ -970,7 +1141,7 @@ def remote_uninstall(host: str, ssh_options: tuple):
         lines = remote.uninstall(host, ssh_options=opts)
     except subprocess.CalledProcessError as e:
         console.print(f"[red]ssh to {host} failed (exit {e.returncode}).[/red]")
-        raise SystemExit(1)
+        raise SystemExit(1) from None
     for line in lines:
         console.print(f"[green]{line}[/green]")
 
@@ -991,9 +1162,14 @@ def tree():
       cmu tree
     """
     from datetime import timedelta
-    from .tree import (make_daily_grass, make_weekly_garden,
-                       make_monthly_forest, make_yearly_ecosystem)
+
     from .parser import parse_today_hourly
+    from .tree import (
+        make_daily_grass,
+        make_monthly_forest,
+        make_weekly_garden,
+        make_yearly_ecosystem,
+    )
 
     console = Console()
     data = load_usage_data()
@@ -1055,13 +1231,24 @@ def tree():
     # -- Yearly (12 months) --
     year = today.year
     yearly_data = []
-    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    month_names = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+    ]
     for m in range(1, 13):
         month_prefix = f"{year}-{m:02d}"
         month_tokens = sum(
-            t.total_tokens for t in data.daily_model_tokens
-            if t.date.startswith(month_prefix)
+            t.total_tokens for t in data.daily_model_tokens if t.date.startswith(month_prefix)
         )
         month_cost = sum(
             sum(info["cost"] for info in models.values())
@@ -1071,9 +1258,7 @@ def tree():
         # The current month includes today's realtime data when the cached
         # sources (stats-cache / cost cache) do not already contain it.
         if m == today.month:
-            today_in_stats = any(
-                t.date == today_str for t in data.daily_model_tokens
-            )
+            today_in_stats = any(t.date == today_str for t in data.daily_model_tokens)
             if not today_in_stats and today_tokens > 0:
                 month_tokens += today_tokens
             if today_str not in daily_costs:
@@ -1088,10 +1273,19 @@ def tree():
 @click.argument("action", type=click.Choice(["start"]))
 @click.option("--host", default="0.0.0.0", show_default=True, help="Bind host.")
 @click.option("--port", "-p", default=8000, show_default=True, help="Bind port.")
-@click.option("--db-path", default=None, metavar="PATH",
-              help="SQLite database path (default: /data/server.db).")
-@click.option("--max-body-bytes", default=None, type=click.IntRange(min=1), metavar="N",
-              help="Reject sync payloads larger than N bytes (default: 2097152).")
+@click.option(
+    "--db-path",
+    default=None,
+    metavar="PATH",
+    help="SQLite database path (default: /data/server.db).",
+)
+@click.option(
+    "--max-body-bytes",
+    default=None,
+    type=click.IntRange(min=1),
+    metavar="N",
+    help="Reject sync payloads larger than N bytes (default: 2097152).",
+)
 def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: int):
     """Start the sync collection server.
 
@@ -1119,9 +1313,10 @@ def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: 
                 "or `uv sync --extra server` in a checkout.",
                 err=True,
             )
-            raise SystemExit(1)
+            raise SystemExit(1) from None
 
         import os
+
         if db_path:
             os.environ["CMU_DB_PATH"] = db_path
         if max_body_bytes:

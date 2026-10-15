@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-
 CLAUDE_DIR = Path.home() / ".claude"
 STATS_FILE = CLAUDE_DIR / "stats-cache.json"
 HISTORY_FILE = CLAUDE_DIR / "history.jsonl"
@@ -121,7 +120,7 @@ def _deduplicate_project_name(name: str) -> str:
         prefix = name[:split_pos]
         rest = name[split_pos:]
         if rest.startswith("-" + prefix):
-            suffix = rest[len(prefix) + 1:]
+            suffix = rest[len(prefix) + 1 :]
             if suffix:
                 return prefix + "/" + suffix
             return prefix
@@ -144,7 +143,7 @@ def _read_session_cwd(session_file: Path) -> str | None:
                 cwd = d.get("cwd")
                 if isinstance(cwd, str) and cwd:
                     return cwd
-    except (OSError, IOError):
+    except OSError:
         pass
     return None
 
@@ -181,7 +180,7 @@ def _project_name_from_dir(raw_name: str) -> str:
     parts = raw_name.split("-")
     try:
         ws_idx = parts.index("workspace")
-        path_parts = "-".join(parts[ws_idx + 1:]) if ws_idx + 1 < len(parts) else raw_name
+        path_parts = "-".join(parts[ws_idx + 1 :]) if ws_idx + 1 < len(parts) else raw_name
         project_name = _deduplicate_project_name(path_parts)
     except ValueError:
         project_name = raw_name

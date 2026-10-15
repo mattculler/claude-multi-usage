@@ -19,7 +19,9 @@ def auto_env(fake_home, monkeypatch):
     monkeypatch.setattr(autosync, "LOCK_FILE", cmu_dir / "autosync.lock")
     monkeypatch.setattr(autosync, "systemd_user_dir", lambda: fake_home.home / "systemd-user")
     monkeypatch.setattr(autosync, "launch_agents_dir", lambda: fake_home.home / "LaunchAgents")
-    monkeypatch.setattr(autosync, "_timer_stamp", lambda: fake_home.home / "timers" / "stamp-cmu-autosync.timer")
+    monkeypatch.setattr(
+        autosync, "_timer_stamp", lambda: fake_home.home / "timers" / "stamp-cmu-autosync.timer"
+    )
     calls = []
     results = {}
 
@@ -37,6 +39,7 @@ def auto_env(fake_home, monkeypatch):
 
 
 # -- change detection ---------------------------------------------------------
+
 
 def test_fingerprint_tracks_usage_files_and_settings(auto_env):
     before = autosync.fingerprint()
@@ -125,9 +128,12 @@ def test_state_survives_corrupt_file(auto_env):
 
 # -- systemd backend ----------------------------------------------------------
 
+
 def test_install_systemd_writes_units_and_enables_timer(auto_env, monkeypatch):
     monkeypatch.setattr(autosync, "backend", lambda: "systemd")
-    monkeypatch.setattr(autosync, "_command", lambda: ["/opt/my venv/bin/cmu", "autosync", "run", "--quiet"])
+    monkeypatch.setattr(
+        autosync, "_command", lambda: ["/opt/my venv/bin/cmu", "autosync", "run", "--quiet"]
+    )
     lines = autosync.install(every_minutes=7)
     unit_dir = autosync.systemd_user_dir()
     service = (unit_dir / "cmu-autosync.service").read_text()
@@ -170,8 +176,17 @@ def test_generated_units_pass_systemd_analyze(auto_env, monkeypatch):
     monkeypatch.setattr(autosync, "backend", lambda: "systemd")
     autosync.install(every_minutes=3)
     unit_dir = autosync.systemd_user_dir()
-    res = subprocess.run(["systemd-analyze", "--user", "verify", str(unit_dir / "cmu-autosync.timer"),
-                          str(unit_dir / "cmu-autosync.service")], capture_output=True, text=True)
+    res = subprocess.run(
+        [
+            "systemd-analyze",
+            "--user",
+            "verify",
+            str(unit_dir / "cmu-autosync.timer"),
+            str(unit_dir / "cmu-autosync.service"),
+        ],
+        capture_output=True,
+        text=True,
+    )
     assert res.returncode == 0, res.stderr + res.stdout
 
 
@@ -222,10 +237,14 @@ def test_systemd_user_dir_ignores_empty_or_relative_xdg(monkeypatch):
 
 # -- launchd backend ----------------------------------------------------------
 
+
 def test_install_launchd_writes_plist_into_gui_domain(auto_env, monkeypatch):
     monkeypatch.setattr(autosync, "backend", lambda: "launchd")
     monkeypatch.setattr(autosync.os, "getuid", lambda: 501)
-    auto_env.results[("launchctl", "print", "gui/501/com.claude-multi-usage.autosync")] = (113, "not found")
+    auto_env.results[("launchctl", "print", "gui/501/com.claude-multi-usage.autosync")] = (
+        113,
+        "not found",
+    )
     lines = autosync.install(every_minutes=10)
     plist = autosync.launch_agents_dir() / "com.claude-multi-usage.autosync.plist"
     with open(plist, "rb") as f:
@@ -234,7 +253,9 @@ def test_install_launchd_writes_plist_into_gui_domain(auto_env, monkeypatch):
     assert data["StartInterval"] == 600 and data["RunAtLoad"] is True
     assert data["WorkingDirectory"] == str(autosync.CACHE_DIR)
     assert ["launchctl", "bootstrap", "gui/501", str(plist)] in auto_env.calls
-    assert any("every 10 min" in line for line in lines) and any("loaded into gui/501" in line for line in lines)
+    assert any("every 10 min" in line for line in lines) and any(
+        "loaded into gui/501" in line for line in lines
+    )
     assert autosync.status()["installed"]
     autosync.uninstall()
     assert not plist.exists()
@@ -250,8 +271,12 @@ def test_install_launchd_without_console_login(auto_env, monkeypatch):
     lines = autosync.install(every_minutes=10)
     assert (autosync.launch_agents_dir() / "com.claude-multi-usage.autosync.plist").exists()
     assert any("starts at the next login" in line for line in lines)
-    assert ["launchctl", "bootstrap", "user/501",
-            str(autosync.launch_agents_dir() / "com.claude-multi-usage.autosync.plist")] in auto_env.calls
+    assert [
+        "launchctl",
+        "bootstrap",
+        "user/501",
+        str(autosync.launch_agents_dir() / "com.claude-multi-usage.autosync.plist"),
+    ] in auto_env.calls
 
 
 def test_unsupported_platform(auto_env, monkeypatch):
@@ -265,7 +290,9 @@ def test_backend_detection(monkeypatch, tmp_path):
     monkeypatch.setattr(autosync.platform, "system", lambda: "Linux")
     monkeypatch.setattr(autosync.shutil, "which", lambda name: "/usr/bin/systemctl")
     monkeypatch.setattr(autosync, "SYSTEMD_BOOTED_DIR", tmp_path / "missing")
-    assert autosync.backend() == "unsupported"  # systemctl present but systemd not running (containers, WSL)
+    assert (
+        autosync.backend() == "unsupported"
+    )  # systemctl present but systemd not running (containers, WSL)
     monkeypatch.setattr(autosync, "SYSTEMD_BOOTED_DIR", tmp_path)
     assert autosync.backend() == "systemd"
     monkeypatch.setattr(autosync.shutil, "which", lambda name: None)
@@ -281,12 +308,20 @@ def test_scheduler_prefers_the_console_script(monkeypatch, tmp_path):
     exe.parent.mkdir()
     exe.write_text("")
     monkeypatch.setattr(autosync.sys, "executable", str(exe))
-    assert autosync._command() == [str(exe), "-m", "claude_multi_usage.cli", "autosync", "run", "--quiet"]
+    assert autosync._command() == [
+        str(exe),
+        "-m",
+        "claude_multi_usage.cli",
+        "autosync",
+        "run",
+        "--quiet",
+    ]
     (exe.parent / "cmu").write_text("")
     assert autosync._command() == [str(exe.parent / "cmu"), "autosync", "run", "--quiet"]
 
 
 # -- CLI ------------------------------------------------------------------------
+
 
 class _Resp:
     def __enter__(self):
@@ -302,7 +337,11 @@ class _Resp:
 def _configure(monkeypatch, posted):
     config.set_server_url("http://sync.invalid")
     config.add_key("k1")
-    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: posted.append(json.loads(req.data)) or _Resp())
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, timeout=None: posted.append(json.loads(req.data)) or _Resp(),
+    )
 
 
 def test_cli_sync_if_changed(auto_env, monkeypatch):
