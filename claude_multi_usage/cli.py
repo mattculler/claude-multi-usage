@@ -1290,8 +1290,10 @@ def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: 
     """Start the sync collection server.
 
     \b
-    Requires the [server] extra: deploy/systemd/install.sh installs it,
-    or `uv sync --extra server` in a checkout.
+    Requires the [server] extra. deploy/systemd/install.sh installs it on
+    a VM. In a checkout: `uv run --extra server cmu server start`. For a
+    uv tool install: `uv tool install -e '.[server]'` from a checkout, or
+    add `[server]` to the git requirement.
 
     \b
     The API has no authentication: run it on a private network only.
@@ -1308,9 +1310,11 @@ def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: 
             import uvicorn
         except ImportError:
             click.echo(
-                "Server dependencies not installed.\n"
-                "Install with the [server] extra: deploy/systemd/install.sh, "
-                "or `uv sync --extra server` in a checkout.",
+                "Server dependencies not installed. Install the [server] extra:\n"
+                "  VM:        deploy/systemd/install.sh\n"
+                "  checkout:  uv run --extra server cmu server start\n"
+                "  uv tool:   uv tool install -e '.[server]'  (or add [server] "
+                "to the git requirement)",
                 err=True,
             )
             raise SystemExit(1) from None

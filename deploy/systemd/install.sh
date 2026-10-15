@@ -11,19 +11,26 @@
 #   - installs uv into /usr/local/bin if no uv is found (https://astral.sh/uv)
 #   - creates a system user "cmu" with no login shell
 #   - creates a virtualenv in /opt/cmu/venv from uv.lock with the [server]
-#     extra (needs network access to PyPI; uv downloads a Python into
-#     /opt/cmu/python if the host has none that is 3.9 or newer)
+#     extra, on the host's Python 3.13 or one uv downloads into
+#     /opt/cmu/python (needs network access to PyPI)
 #   - creates /var/lib/cmu for the SQLite database
 #   - writes /etc/default/cmu-server (settings; created once, never overwritten)
 #   - installs cmu-server.service, enables it and (re)starts it
 #   - waits for /api/health to answer
 #
 # To upgrade: git pull, then re-run this script. The database is kept.
-# Set UV=/path/to/uv to use a particular uv, PYTHON=3.12 (or a path) to pick
-# the interpreter.
+# Variables (sudo resets the environment, so pass them on the command line,
+# e.g. `sudo PYTHON=3.12 deploy/systemd/install.sh`):
+#   UV=/path/to/uv   use this uv instead of searching for one or installing it
+#   PYTHON=3.12      Python version or interpreter path for the venv (default 3.13)
 #
 # The server has no authentication. Keep it on a private network.
 set -euo pipefail
+umask 022
+# A predictable PATH: a root login shell may carry /root/.local/bin, where a
+# uv-managed Python would be found first and end up, unreadable by the
+# service user, as the venv's interpreter.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 APP_USER=cmu
 INSTALL_DIR=/opt/cmu
@@ -35,6 +42,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT_SRC="$SCRIPT_DIR/$UNIT_NAME"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 UV_INSTALL_URL=https://astral.sh/uv/install.sh
+PYTHON="${PYTHON:-3.13}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -50,6 +58,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     echo "Kept the database in $DATA_DIR, the settings in $DEFAULTS_FILE, the '$APP_USER' user and uv."
     echo "To remove those too:"
     echo "  sudo rm -rf $DATA_DIR $DEFAULTS_FILE && sudo userdel $APP_USER"
+    echo "  sudo rm -f /usr/local/bin/uv /usr/local/bin/uvx && sudo rm -rf /root/.cache/uv   # if this script installed uv"
     exit 0
 fi
 [[ -z "${1:-}" ]] || die "unknown argument: $1 (only --uninstall is supported)"
@@ -57,8 +66,11 @@ fi
 [[ -f "$REPO_ROOT/pyproject.toml" && -f "$REPO_ROOT/uv.lock" && -f "$UNIT_SRC" ]] \
     || die "run this script from a checkout of the repository (pyproject.toml and uv.lock not found at $REPO_ROOT)"
 
-# uv: the one named in $UV, the one on root's PATH, the usual places, or the
-# invoking user's own copy. Otherwise install it for the whole host.
+# uv: the one named in $UV, the one on PATH, the usual places, or the invoking
+# user's own copy. Otherwise install it for the whole host.
+if [[ -n "${UV:-}" && ! -x "${UV}" ]]; then
+    die "UV=$UV is not an executable"
+fi
 find_uv() {
     local sudo_home="" candidate
     [[ -n "${SUDO_USER:-}" ]] && sudo_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
@@ -74,7 +86,7 @@ find_uv() {
 if ! UV="$(find_uv)"; then
     echo "==> Installing uv into /usr/local/bin ($UV_INSTALL_URL)"
     command -v curl >/dev/null 2>&1 \
-        || die "curl is needed to download uv (apt install curl), or install uv yourself and set UV=/path/to/uv"
+        || die "curl is needed to download uv (apt install curl), or install uv yourself and pass UV=/path/to/uv"
     curl -LsSf "$UV_INSTALL_URL" | env UV_UNMANAGED_INSTALL=/usr/local/bin sh
     UV=/usr/local/bin/uv
     [[ -x "$UV" ]] || die "uv installation failed: $UV not found"
@@ -89,16 +101,27 @@ fi
 install -d -m 755 "$INSTALL_DIR"
 install -d -m 750 -o "$APP_USER" -g "$APP_USER" "$DATA_DIR"
 
-echo "==> Virtualenv in $VENV (from uv.lock)"
+echo "==> Virtualenv in $VENV (from uv.lock, Python $PYTHON)"
 # The venv is built by root but used by the "cmu" user, so it must not share
 # files with root's cache (copy, not hardlink) and a downloaded Python must
-# live somewhere world-readable rather than under /root.
+# live somewhere world-readable rather than under /root. The project itself
+# is always rebuilt: uv would otherwise keep the previous build until
+# pyproject.toml changes, and `git pull` rarely changes it.
 export UV_PROJECT_ENVIRONMENT="$VENV"
 export UV_LINK_MODE=copy
 export UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/python"
 "$UV" sync --project "$REPO_ROOT" --locked --no-dev --no-editable --extra server --quiet \
-    ${PYTHON:+--python "$PYTHON"}
+    --reinstall-package claude-multi-usage --python "$PYTHON"
 [[ -x "$VENV/bin/cmu" ]] || die "installation failed: $VENV/bin/cmu not found"
+# Copied files keep the modes they had in root's cache; make sure the service
+# user can read and run everything, then prove it.
+chmod -R u=rwX,go=rX "$VENV"
+[[ -d "$INSTALL_DIR/python" ]] && chmod -R u=rwX,go=rX "$INSTALL_DIR/python"
+case "$(readlink -f "$VENV/bin/python")" in
+    /root/*) die "the venv uses a Python under /root, which the '$APP_USER' user cannot read; pass PYTHON=3.13 or a path outside /root" ;;
+esac
+runuser -u "$APP_USER" -- env HOME="$DATA_DIR" "$VENV/bin/cmu" --version >/dev/null \
+    || die "the '$APP_USER' user cannot run $VENV/bin/cmu; check the permissions under $INSTALL_DIR"
 
 echo "==> Settings in $DEFAULTS_FILE"
 if [[ ! -f "$DEFAULTS_FILE" ]]; then

@@ -3,13 +3,16 @@
 ``cmu remote install user@host`` runs, on the remote machine:
 
 1. `uv <https://docs.astral.sh/uv/>`_, installed into ``~/.local/bin`` with
-   the official installer if the host has none
+   the official installer if the host has none (shell profiles are left
+   alone, so ``~/.local/bin`` must be on the PATH there)
 2. ``uv tool install`` of cmu, either from this checkout (its git-tracked
-   files, streamed over as a tarball) or from a requirement such as a
-   ``git+https://...`` URL; uv downloads a Python if the host has none that
-   is 3.9 or newer
-3. a ``~/.local/bin/cmu`` command (if something else is already there, the
-   commands go to ``~/.local/share/cmu/bin`` instead)
+   files, streamed over as a tarball and kept in ``~/.local/share/cmu/src``)
+   or from a requirement such as a ``git+https://...`` URL; uv downloads a
+   Python if the host has none that is 3.9 or newer
+3. ``~/.local/bin/cmu`` and ``~/.local/bin/claude-multi-usage`` commands (if
+   something else is already there, the commands go to
+   ``~/.local/share/cmu/bin`` instead); an install made by the venv-based
+   version of this command is replaced
 4. ``cmu config server/key/alias`` with this machine's settings unless
    overridden
 5. ``cmu autosync install``, which also performs the first sync
@@ -160,11 +163,11 @@ BIN="$HOME/.local/bin"
 mkdir -p "$BASE" "$BIN"
 {_find_uv()}
 if [ -z "$UV" ]; then
-    echo "==> $(hostname): installing uv into $BIN ({UV_INSTALL_URL})"
+    echo "==> $(hostname): installing uv into $BIN from {UV_INSTALL_URL}"
     if command -v curl >/dev/null 2>&1; then
-        curl -LsSf {UV_INSTALL_URL} | sh
+        curl -LsSf {UV_INSTALL_URL} | env UV_INSTALL_DIR="$BIN" UV_NO_MODIFY_PATH=1 sh
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO- {UV_INSTALL_URL} | sh
+        wget -qO- {UV_INSTALL_URL} | env UV_INSTALL_DIR="$BIN" UV_NO_MODIFY_PATH=1 sh
     else
         echo "error: curl or wget is needed on $(hostname) to download uv" >&2; exit 1
     fi
@@ -172,14 +175,23 @@ if [ -z "$UV" ]; then
     [ -x "$UV" ] || {{ echo "error: uv installation failed: $UV not found" >&2; exit 1; }}
 fi
 TOOL_BIN="$("$UV" tool dir)/{TOOL_NAME}/bin"
-# Never clobber a cmu that is not ours: put the commands next to the tool instead.
-if [ -e "$BIN/cmu" ] && [ "$(readlink "$BIN/cmu" 2>/dev/null || true)" != "$TOOL_BIN/cmu" ]; then
-    export UV_TOOL_BIN_DIR="$BASE/bin"
-    echo "note: $BIN/cmu already exists and is not ours; the cmu command goes to $BASE/bin instead"
+TOOLS_BIN="$("$UV" tool dir --bin)"
+# The venv-based installer of earlier versions left a link to its venv: replace both.
+if [ "$(readlink "$BIN/cmu" 2>/dev/null || true)" = "$BASE/venv/bin/cmu" ]; then
+    rm -f "$BIN/cmu"
 fi
+rm -rf "$BASE/venv"
+# Never clobber commands that are not ours: put ours next to the tool instead.
+for exe in cmu {TOOL_NAME}; do
+    if [ -e "$TOOLS_BIN/$exe" ] \\
+            && [ "$(readlink "$TOOLS_BIN/$exe" 2>/dev/null || true)" != "$TOOL_BIN/$exe" ]; then
+        export UV_TOOL_BIN_DIR="$BASE/bin"
+        echo "note: $TOOLS_BIN/$exe exists and is not ours; the cmu command goes to $BASE/bin"
+        break
+    fi
+done
 echo "==> $(hostname): installing cmu with uv $("$UV" --version | cut -d' ' -f2)"
 "$UV" tool install --quiet --reinstall{python_flag} {install_from}
-rm -rf "$BASE/src"
 CMU="$TOOL_BIN/cmu"
 [ -x "$CMU" ] || {{ echo "error: $CMU not found after install" >&2; exit 1; }}
 echo "cmu is linked in $("$UV" tool dir --bin) (make sure it is on your PATH in interactive shells)"
@@ -196,15 +208,32 @@ echo "==> $(hostname): scheduling autosync every {every_minutes} min (includes t
 def uninstall_script() -> str:
     return f"""set -uo pipefail
 BASE={REMOTE_BASE}
+BIN="$HOME/.local/bin"
 {_find_uv()}
+removed=""
 if [ -n "$UV" ]; then
     CMU="$("$UV" tool dir)/{TOOL_NAME}/bin/cmu"
-    if [ -x "$CMU" ]; then "$CMU" autosync uninstall || true; fi
-    "$UV" tool uninstall {TOOL_NAME} >/dev/null 2>&1 || true
-    UV_TOOL_BIN_DIR="$BASE/bin" "$UV" tool uninstall {TOOL_NAME} >/dev/null 2>&1 || true
+    if [ -x "$CMU" ]; then
+        "$CMU" autosync uninstall || true
+        "$UV" tool uninstall {TOOL_NAME} >/dev/null 2>&1 || true
+        removed="uv tool"
+    fi
+fi
+# Installs made by the venv-based installer of earlier versions.
+if [ -x "$BASE/venv/bin/cmu" ]; then
+    "$BASE/venv/bin/cmu" autosync uninstall || true
+    removed="${{removed:+$removed, }}venv"
+fi
+if [ "$(readlink "$BIN/cmu" 2>/dev/null || true)" = "$BASE/venv/bin/cmu" ]; then
+    rm -f "$BIN/cmu"
 fi
 rm -rf "$BASE"
-echo "==> $(hostname): removed cmu and its autosync job (config and uv kept)"
+if [ -n "$removed" ]; then
+    echo "==> $(hostname): removed cmu ($removed) and its autosync job"
+    echo "    kept: the config in ~/.claude-multi-usage and uv"
+else
+    echo "warning: no cmu install found on $(hostname); nothing to remove" >&2
+fi
 """
 
 

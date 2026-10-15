@@ -65,7 +65,7 @@ cd claude-multi-usage
 sudo deploy/systemd/install.sh
 ```
 
-The script installs uv into `/usr/local/bin` if the host has none, creates a `cmu` system user, builds `/opt/cmu/venv` from `uv.lock` (downloading a Python into `/opt/cmu/python` if the host has none that is 3.9 or newer), keeps the database in `/var/lib/cmu/server.db`, and enables `cmu-server.service` on port 8000, then waits for `/api/health` to answer. Settings (bind address, port, database path, request size limit) live in `/etc/default/cmu-server`; restart the service after editing. A different database directory must exist and be writable by the `cmu` user. To upgrade, `git pull` and re-run the script. To remove it, `sudo deploy/systemd/install.sh --uninstall`.
+The script installs uv into `/usr/local/bin` if the host has none, creates a `cmu` system user, builds `/opt/cmu/venv` from `uv.lock` on the host's Python 3.13 (or one uv downloads into `/opt/cmu/python`; `sudo PYTHON=3.12 deploy/systemd/install.sh` picks another, since sudo resets the environment the variable goes after `sudo`), keeps the database in `/var/lib/cmu/server.db`, and enables `cmu-server.service` on port 8000, then waits for `/api/health` to answer. Settings (bind address, port, database path, request size limit) live in `/etc/default/cmu-server`; restart the service after editing. A different database directory must exist and be writable by the `cmu` user. To upgrade, `git pull` and re-run the script. To remove it, `sudo deploy/systemd/install.sh --uninstall`.
 
 ```bash
 systemctl status cmu-server
@@ -107,11 +107,11 @@ The Service is `ClusterIP`, reachable inside the cluster only. `deploy/k8s/ingre
 From a checkout of this repository:
 
 ```bash
-uv run --extra server cmu server start
+uv run --extra server cmu server start --db-path ./server.db
 uv run --extra server cmu server start --host 0.0.0.0 --port 8000 --db-path ./server.db
 ```
 
-Options: `--host`, `--port`, `--db-path PATH` (default `/data/server.db`), `--max-body-bytes N` (reject sync payloads larger than N bytes; default 2 MB). The same settings can be given as `CMU_DB_PATH` and `CMU_MAX_BODY_BYTES` environment variables.
+Options: `--host`, `--port`, `--db-path PATH` (default `/data/server.db`, the Docker image's volume), `--max-body-bytes N` (reject sync payloads larger than N bytes; default 2 MB). The same settings can be given as `CMU_DB_PATH` and `CMU_MAX_BODY_BYTES` environment variables.
 </details>
 
 ### Client Setup
@@ -167,7 +167,7 @@ cmu remote install laptop --from git+https://github.com/mattculler/claude-multi-
 cmu remote uninstall laptop
 ```
 
-The remote gets uv (installed into `~/.local/bin` by the official installer if the host has none), cmu as a uv tool with a `~/.local/bin/cmu` command, this machine's server URL and keys (override with `--server` and `--key`), and `cmu autosync install` (add `--linger` for a Linux remote that should sync while nobody is logged in). When run from a source checkout, the checkout's git-tracked files are sent over; otherwise the repository URL is installed, which needs `git` and GitHub access on the remote. The remote needs `bash`, `curl` or `wget`, and access to PyPI for the dependencies; uv downloads a Python if the host has none that is 3.9 or newer (pick one with `--python 3.12`). Re-running the command upgrades an existing install. On a Mac that nobody is logged in to, the launchd agent is installed but only starts at the next login. Make sure the server URL is one the remote can reach (not `localhost`).
+The remote gets uv (installed into `~/.local/bin` by the official installer if the host has none; shell profiles are left alone, so that directory must be on the PATH there), cmu as a uv tool with a `~/.local/bin/cmu` command, this machine's server URL and keys (override with `--server` and `--key`), and `cmu autosync install` (add `--linger` for a Linux remote that should sync while nobody is logged in). When run from a source checkout, the checkout's git-tracked files are sent over and kept in `~/.local/share/cmu/src`; otherwise the repository URL is installed, which needs `git` and GitHub access on the remote. The remote needs `bash`, `curl` or `wget`, and access to PyPI for the dependencies; uv downloads a Python if the host has none that is 3.9 or newer (pick one with `--python 3.12`). Re-running the command upgrades an existing install, including one made by the earlier venv-based version of this command. On a Mac that nobody is logged in to, the launchd agent is installed but only starts at the next login. Make sure the server URL is one the remote can reach (not `localhost`).
 
 ### claude.ai chats (web, desktop, Android, iOS)
 
@@ -315,7 +315,7 @@ uv run ruff format        # format
 uv run pytest
 ```
 
-CI runs the same three commands with `--locked`, so run `uv lock` after changing dependencies and commit `uv.lock`.
+CI runs `uv sync --locked --extra server`, `uv run ruff check`, `uv run ruff format --check` and `uv run pytest`; `--locked` fails when `uv.lock` is stale, so run `uv lock` after changing dependencies and commit `uv.lock`.
 
 Tests run against a synthetic `~/.claude` tree in a temp directory and never touch the network.
 
