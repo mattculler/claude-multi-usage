@@ -1,0 +1,36 @@
+[Unit]
+Description=sandburn sync server
+Documentation=https://github.com/mattculler/sandburn
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sandburn
+Group=sandburn
+WorkingDirectory=/var/lib/sandburn
+
+# Defaults. Override in /etc/default/sandburn-server (created by install.sh),
+# then `systemctl restart sandburn-server`.
+Environment=SANDBURN_HOST=0.0.0.0
+Environment=SANDBURN_PORT=8000
+Environment=SANDBURN_DB_PATH=/var/lib/sandburn/server.db
+Environment=SANDBURN_MAX_BODY_BYTES=2097152
+EnvironmentFile=-/etc/default/sandburn-server
+
+# The API has no authentication. Bind to a LAN or VPN address and never
+# expose this port to the Internet.
+ExecStart=/opt/sandburn/venv/bin/sburn server start --host ${SANDBURN_HOST} --port ${SANDBURN_PORT}
+Restart=on-failure
+RestartSec=5
+
+# Light sandboxing that does not affect the server: no privilege escalation,
+# a private /tmp, and /usr, /boot and /etc read-only. /var, /srv, /opt and
+# /home stay as they are, so SANDBURN_DB_PATH may point anywhere the "sandburn" user
+# can write.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

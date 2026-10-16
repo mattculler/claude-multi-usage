@@ -1,10 +1,10 @@
 """Incremental index of Claude Code session logs.
 
-Everything cmu shows is derived from ``~/.claude/projects/**/*.jsonl``.
+Everything sburn shows is derived from ``~/.claude/projects/**/*.jsonl``.
 Those files are append-only and large (a single long session can be tens
 of megabytes), so parsing all of them on every command does not scale.
 
-This module keeps a SQLite index in ``~/.claude-multi-usage/index.db``:
+This module keeps a SQLite index in ``~/.sandburn/index.db``:
 
 * A file is re-read only when its size or mtime changed. When it grew and
   the bytes before the old end are unchanged (the normal case for the
@@ -20,12 +20,12 @@ This module keeps a SQLite index in ``~/.claude-multi-usage/index.db``:
   aggregations therefore count each message id once (the ``owned`` view).
 * Token counts are stored, never prices, so a changed pricing table or a
   fix in the cost logic takes effect immediately without any rebuild.
-* Refreshes run in one write transaction, so concurrent cmu processes
-  (the README's shell wrapper backgrounds ``cmu sync``) serialize instead
+* Refreshes run in one write transaction, so concurrent sburn processes
+  (the README's shell wrapper backgrounds ``sburn sync``) serialize instead
   of double counting.
 
 Local dates and hours are computed when a file is indexed; after changing
-the system time zone run ``cmu cost --rebuild``. If the index cannot be
+the system time zone run ``sburn cost --rebuild``. If the index cannot be
 opened (read-only home directory) an in-memory index is used for the run.
 """
 
@@ -52,7 +52,7 @@ from .parser import (
     _utc_to_local,
 )
 
-CACHE_DIR = Path.home() / ".claude-multi-usage"
+CACHE_DIR = Path.home() / ".sandburn"
 INDEX_FILE = CACHE_DIR / "index.db"
 SCHEMA_VERSION = 2
 _TAIL_BYTES = 256  # bytes remembered from the end of the indexed region
@@ -642,7 +642,7 @@ def get_index() -> SessionIndex:
         idx = SessionIndex(INDEX_FILE)
         if idx.fallback_reason:
             print(
-                f"cmu: session index unavailable ({idx.fallback_reason}); "
+                f"sburn: session index unavailable ({idx.fallback_reason}); "
                 "reading session files directly this run",
                 file=sys.stderr,
             )

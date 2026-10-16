@@ -9,14 +9,14 @@ if not any(importlib.util.find_spec(m) for m in ("httpx2", "httpx")):
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from claude_multi_usage.server import app as app_module  # noqa: E402
-from claude_multi_usage.server.models import SyncPayload  # noqa: E402
-from claude_multi_usage.server.store import Store  # noqa: E402
+from sandburn.server import app as app_module  # noqa: E402
+from sandburn.server.models import SyncPayload  # noqa: E402
+from sandburn.server.store import Store  # noqa: E402
 
 
 def _make_client(tmp_path, monkeypatch):
-    monkeypatch.setenv("CMU_DB_PATH", str(tmp_path / "server.db"))
-    monkeypatch.delenv("CMU_MAX_BODY_BYTES", raising=False)
+    monkeypatch.setenv("SANDBURN_DB_PATH", str(tmp_path / "server.db"))
+    monkeypatch.delenv("SANDBURN_MAX_BODY_BYTES", raising=False)
     monkeypatch.setattr(app_module, "_store", None)
     return TestClient(app_module.app)
 
@@ -116,9 +116,9 @@ def test_chunked_rejection_accumulates_across_asgi_messages(tmp_path, monkeypatc
 
     # The accepted request below reaches the real endpoint, so give it a
     # scratch database rather than the default /data/server.db.
-    monkeypatch.setenv("CMU_DB_PATH", str(tmp_path / "server.db"))
+    monkeypatch.setenv("SANDBURN_DB_PATH", str(tmp_path / "server.db"))
     monkeypatch.setattr(app_module, "_store", None)
-    monkeypatch.setenv("CMU_MAX_BODY_BYTES", "200")
+    monkeypatch.setenv("SANDBURN_MAX_BODY_BYTES", "200")
     chunks = [b"x" * 150, b"x" * 150, b"x" * 146]
 
     async def run(chunks):
@@ -166,10 +166,10 @@ def test_chunked_rejection_accumulates_across_asgi_messages(tmp_path, monkeypatc
 
 
 def test_bad_body_limit_fails_at_startup(tmp_path, monkeypatch):
-    monkeypatch.setenv("CMU_DB_PATH", str(tmp_path / "server.db"))
-    monkeypatch.setenv("CMU_MAX_BODY_BYTES", "abc")
+    monkeypatch.setenv("SANDBURN_DB_PATH", str(tmp_path / "server.db"))
+    monkeypatch.setenv("SANDBURN_MAX_BODY_BYTES", "abc")
     monkeypatch.setattr(app_module, "_store", None)
-    with pytest.raises(ValueError, match="CMU_MAX_BODY_BYTES"), TestClient(app_module.app):
+    with pytest.raises(ValueError, match="SANDBURN_MAX_BODY_BYTES"), TestClient(app_module.app):
         pass
 
 
@@ -243,7 +243,7 @@ def test_store_purges_legacy_names_on_startup(tmp_path):
 
 def test_body_limit_is_configurable(tmp_path, monkeypatch):
     with _make_client(tmp_path, monkeypatch) as c:
-        monkeypatch.setenv("CMU_MAX_BODY_BYTES", "200")  # read per request
+        monkeypatch.setenv("SANDBURN_MAX_BODY_BYTES", "200")  # read per request
         assert c.post("/api/sync", json={"hostname": "tiny", "synced_at": "x"}).status_code == 200
         assert c.post("/api/sync", json=payload()).status_code == 413
 
@@ -251,7 +251,7 @@ def test_body_limit_is_configurable(tmp_path, monkeypatch):
 def test_chunked_body_without_content_length_is_limited(tmp_path, monkeypatch):
     body = json.dumps(payload()).encode()
     with _make_client(tmp_path, monkeypatch) as c:
-        monkeypatch.setenv("CMU_MAX_BODY_BYTES", "200")
+        monkeypatch.setenv("SANDBURN_MAX_BODY_BYTES", "200")
         r = c.post(
             "/api/sync",
             content=iter([body[:100], body[100:]]),
@@ -264,13 +264,13 @@ def test_chunked_body_without_content_length_is_limited(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("raw", ["abc", "0", "-5"])
 def test_invalid_body_limit_is_rejected(monkeypatch, raw):
-    monkeypatch.setenv("CMU_MAX_BODY_BYTES", raw)
+    monkeypatch.setenv("SANDBURN_MAX_BODY_BYTES", raw)
     with pytest.raises(ValueError):
         app_module.get_max_body_bytes()
 
 
 def test_default_body_limit(monkeypatch):
-    monkeypatch.delenv("CMU_MAX_BODY_BYTES", raising=False)
+    monkeypatch.delenv("SANDBURN_MAX_BODY_BYTES", raising=False)
     assert app_module.get_max_body_bytes() == app_module.DEFAULT_MAX_BODY_BYTES
 
 

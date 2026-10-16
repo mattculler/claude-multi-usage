@@ -1,21 +1,21 @@
-"""Install cmu and its periodic sync on another machine over SSH.
+"""Install sburn and its periodic sync on another machine over SSH.
 
-``cmu remote install user@host`` runs, on the remote machine:
+``sburn remote install user@host`` runs, on the remote machine:
 
 1. `uv <https://docs.astral.sh/uv/>`_, installed into ``~/.local/bin`` with
    the official installer if the host has none (shell profiles are left
    alone, so ``~/.local/bin`` must be on the PATH there)
-2. ``uv tool install`` of cmu, either from this checkout (its git-tracked
-   files, streamed over as a tarball and kept in ``~/.local/share/cmu/src``)
+2. ``uv tool install`` of sburn, either from this checkout (its git-tracked
+   files, streamed over as a tarball and kept in ``~/.local/share/sandburn/src``)
    or from a requirement such as a ``git+https://...`` URL; uv downloads a
    Python if the host has none that is 3.9 or newer
-3. ``~/.local/bin/cmu`` and ``~/.local/bin/claude-multi-usage`` commands (if
+3. ``~/.local/bin/sburn`` and ``~/.local/bin/sandburn`` commands (if
    something else is already there, the commands go to
-   ``~/.local/share/cmu/bin`` instead); an install made by the venv-based
-   version of this command is replaced
-4. ``cmu config server/key/alias`` with this machine's settings unless
+   ``~/.local/share/sandburn/bin`` instead); an install from before the
+   tool was renamed (claude-multi-usage, command ``cmu``) is removed
+4. ``sburn config server/key/alias`` with this machine's settings unless
    overridden
-5. ``cmu autosync install``, which also performs the first sync
+5. ``sburn autosync install``, which also performs the first sync
 
 Everything goes through the user's own ``ssh`` and needs ``bash`` and
 ``curl`` or ``wget`` on the remote; nothing but the source code, the server
@@ -33,15 +33,18 @@ from importlib import metadata
 from pathlib import Path
 from typing import Optional
 
-from .autosync import LAUNCHD_LABEL, SYSTEMD_UNIT
+from .autosync import LAUNCHD_LABEL, LEGACY_LAUNCHD_LABEL, LEGACY_SYSTEMD_UNIT, SYSTEMD_UNIT
 
 PACKAGE_DIR = Path(__file__).resolve().parent
-REMOTE_BASE = "~/.local/share/cmu"
+REMOTE_BASE = "~/.local/share/sandburn"
 UV_INSTALL_URL = "https://astral.sh/uv/install.sh"
-TOOL_NAME = "claude-multi-usage"
+TOOL_NAME = "sandburn"
+# Before the rename the tool was claude-multi-usage (command cmu) and lived here.
+LEGACY_BASE = "~/.local/share/cmu"
+LEGACY_TOOL_NAME = "claude-multi-usage"
 # Where uv may live outside PATH on a remote: its installer, Homebrew, /usr/local.
 UV_FALLBACKS = ("$HOME/.local/bin/uv", "/opt/homebrew/bin/uv", "/usr/local/bin/uv")
-# Exit status of the uninstall script when the remote had no cmu install.
+# Exit status of the uninstall script when the remote had no sburn install.
 NOTHING_TO_REMOVE = 3
 _EXCLUDE_DIRS = {
     ".git",
@@ -72,7 +75,7 @@ _EXCLUDE_PREFIXES = (".env",)
 
 
 def default_source() -> str:
-    """Where the remote should install cmu from.
+    """Where the remote should install sburn from.
 
     A source checkout (pyproject.toml next to the package) is sent as a
     tarball so the remote gets exactly this code. Otherwise the repository
@@ -82,14 +85,14 @@ def default_source() -> str:
     if (checkout / "pyproject.toml").exists():
         return str(checkout)
     try:
-        md = metadata.metadata("claude-multi-usage")
+        md = metadata.metadata("sandburn")
         for entry in md.get_all("Project-URL") or []:
             label, _, url = entry.partition(",")
             if label.strip().lower() == "repository":
                 return "git+" + url.strip()
     except metadata.PackageNotFoundError:
         pass
-    raise RuntimeError("cannot determine where to install cmu from; pass --from PATH-or-URL")
+    raise RuntimeError("cannot determine where to install sburn from; pass --from PATH-or-URL")
 
 
 def _wanted(rel: Path) -> bool:
@@ -161,11 +164,12 @@ def install_script(
     q = shlex.quote
     install_from = '"$BASE/src"' if source_is_tarball else q(requirement or "")
     python_flag = f" --python {q(python)}" if python else ""
-    key_lines = "\n".join(f'"$CMU" config key add {q(k)} {q(desc)}' for k, desc in keys)
-    alias_line = f'"$CMU" config alias {q(alias)}' if alias else ""
+    key_lines = "\n".join(f'"$SBURN" config key add {q(k)} {q(desc)}' for k, desc in keys)
+    alias_line = f'"$SBURN" config alias {q(alias)}' if alias else ""
     linger_flag = " --linger" if linger else ""
     return f"""set -euo pipefail
 BASE={REMOTE_BASE}
+LEGACY_BASE={LEGACY_BASE}
 BIN="$HOME/.local/bin"
 mkdir -p "$BASE" "$BIN"
 {_find_uv()}
@@ -183,78 +187,87 @@ if [ -z "$UV" ]; then
 fi
 TOOL_BIN="$("$UV" tool dir)/{TOOL_NAME}/bin"
 TOOLS_BIN="$("$UV" tool dir --bin)"
-# The venv-based installer of earlier versions left a link to its venv. uv will not
-# overwrite a link it did not make, so take it away; put it back if the install fails.
-restore_link=""
-if [ "$(readlink "$BIN/cmu" 2>/dev/null || true)" = "$BASE/venv/bin/cmu" ]; then
-    rm -f "$BIN/cmu"
-    restore_link=1
-    trap '[ -z "$restore_link" ] || ln -sfn "$BASE/venv/bin/cmu" "$BIN/cmu"' EXIT
-fi
 # Never clobber commands that are not ours: put ours next to the tool instead.
-for exe in cmu {TOOL_NAME}; do
+for exe in sburn {TOOL_NAME}; do
     if [ -e "$TOOLS_BIN/$exe" ] \\
             && [ "$(readlink "$TOOLS_BIN/$exe" 2>/dev/null || true)" != "$TOOL_BIN/$exe" ]; then
         export UV_TOOL_BIN_DIR="$BASE/bin"
-        echo "note: $TOOLS_BIN/$exe exists and is not ours; the cmu command goes to $BASE/bin"
+        echo "note: $TOOLS_BIN/$exe exists and is not ours; the sburn command goes to $BASE/bin"
         break
     fi
 done
-echo "==> $(hostname): installing cmu with uv $("$UV" --version | cut -d' ' -f2)"
+echo "==> $(hostname): installing sburn with uv $("$UV" --version | cut -d' ' -f2)"
 "$UV" tool install --quiet --reinstall{python_flag} {install_from}
-CMU="$TOOL_BIN/cmu"
-[ -x "$CMU" ] || {{ echo "error: $CMU not found after install" >&2; exit 1; }}
-restore_link=""
-rm -rf "$BASE/venv"
-echo "cmu is linked in $("$UV" tool dir --bin) (make sure it is on your PATH in interactive shells)"
+SBURN="$TOOL_BIN/sburn"
+[ -x "$SBURN" ] || {{ echo "error: $SBURN not found after install" >&2; exit 1; }}
+echo "sburn is linked in $("$UV" tool dir --bin) (make sure that is on your PATH)"
+# An install from before the rename ({LEGACY_TOOL_NAME}, command cmu): the uv tool,
+# or the venv-based installer before it. `autosync install` below replaces its job.
+if "$UV" tool uninstall {LEGACY_TOOL_NAME} >/dev/null 2>&1; then
+    echo "==> $(hostname): removed the pre-rename {LEGACY_TOOL_NAME} tool"
+fi
+if [ "$(readlink "$BIN/cmu" 2>/dev/null || true)" = "$LEGACY_BASE/venv/bin/cmu" ]; then
+    rm -f "$BIN/cmu"
+fi
+rm -rf "$LEGACY_BASE"
 echo "==> $(hostname): configuring"
-"$CMU" config server {q(server_url)}
+"$SBURN" config server {q(server_url)}
 {key_lines}
 {alias_line}
 echo "==> $(hostname): scheduling autosync every {every_minutes} min (includes the first sync)"
-"$CMU" autosync install --every {every_minutes}{linger_flag}
-"$CMU" autosync status
+"$SBURN" autosync install --every {every_minutes}{linger_flag}
+"$SBURN" autosync status
 """
 
 
 def uninstall_script() -> str:
     return f"""set -uo pipefail
 BASE={REMOTE_BASE}
+LEGACY_BASE={LEGACY_BASE}
 BIN="$HOME/.local/bin"
 {_find_uv()}
 removed=""
 job_left=""
 if [ -n "$UV" ]; then
-    CMU="$("$UV" tool dir)/{TOOL_NAME}/bin/cmu"
-    if [ -x "$CMU" ]; then
-        "$CMU" autosync uninstall || job_left=1
+    SBURN="$("$UV" tool dir)/{TOOL_NAME}/bin/sburn"
+    if [ -x "$SBURN" ]; then
+        "$SBURN" autosync uninstall || job_left=1
         "$UV" tool uninstall {TOOL_NAME} >/dev/null 2>&1 || true
         removed="uv tool"
     fi
+    # From before the rename ({LEGACY_TOOL_NAME}, command cmu). `sburn autosync
+    # uninstall` above also removed its job; without sburn the old command must.
+    CMU="$("$UV" tool dir)/{LEGACY_TOOL_NAME}/bin/cmu"
+    if [ -x "$CMU" ]; then
+        [ -n "$removed" ] || "$CMU" autosync uninstall || job_left=1
+        "$UV" tool uninstall {LEGACY_TOOL_NAME} >/dev/null 2>&1 || true
+        removed="${{removed:+$removed, }}pre-rename uv tool"
+    fi
 fi
-# Installs made by the venv-based installer of earlier versions.
-if [ -x "$BASE/venv/bin/cmu" ]; then
-    "$BASE/venv/bin/cmu" autosync uninstall || job_left=1
-    removed="${{removed:+$removed, }}venv"
+# ...or made by the venv-based installer before that.
+if [ -x "$LEGACY_BASE/venv/bin/cmu" ]; then
+    [ -n "$removed" ] || "$LEGACY_BASE/venv/bin/cmu" autosync uninstall || job_left=1
+    removed="${{removed:+$removed, }}pre-rename venv"
 fi
-if [ "$(readlink "$BIN/cmu" 2>/dev/null || true)" = "$BASE/venv/bin/cmu" ]; then
+if [ "$(readlink "$BIN/cmu" 2>/dev/null || true)" = "$LEGACY_BASE/venv/bin/cmu" ]; then
     rm -f "$BIN/cmu"
 fi
-rm -rf "$BASE"
+rm -rf "$BASE" "$LEGACY_BASE"
 if [ -z "$removed" ]; then
-    echo "warning: no cmu install found on $(hostname); nothing to remove" >&2
+    echo "warning: no sburn install found on $(hostname); nothing to remove" >&2
     exit {NOTHING_TO_REMOVE}
 fi
 if [ -n "$job_left" ]; then
-    echo "==> $(hostname): removed cmu ($removed); its autosync job could not be removed" >&2
+    echo "==> $(hostname): removed sburn ($removed); its autosync job could not be removed" >&2
     echo "    Linux: systemctl --user disable --now {SYSTEMD_UNIT}.timer;" >&2
     echo "           rm ~/.config/systemd/user/{SYSTEMD_UNIT}.*" >&2
     echo "    macOS: launchctl bootout gui/$(id -u)/{LAUNCHD_LABEL};" >&2
     echo "           rm ~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist" >&2
+    echo "    (before the rename: {LEGACY_SYSTEMD_UNIT} and {LEGACY_LAUNCHD_LABEL})" >&2
 else
-    echo "==> $(hostname): removed cmu ($removed) and its autosync job"
+    echo "==> $(hostname): removed sburn ($removed) and its autosync job"
 fi
-echo "    kept: the config in ~/.claude-multi-usage and uv"
+echo "    kept: the config in ~/.sandburn and uv"
 """
 
 
@@ -275,7 +288,7 @@ def install(
     linger: bool = False,
     run=_ssh,
 ) -> list[str]:
-    """Install cmu on ``host``. Returns lines describing what was done."""
+    """Install sburn on ``host``. Returns lines describing what was done."""
     ssh_options = ssh_options or []
     source = source or default_source()
     src_path = Path(source).expanduser()
@@ -294,7 +307,7 @@ def install(
         )
         lines.append(f"{host} installs from {source}")
     run(host, ["bash", "-s"], script.encode(), ssh_options)
-    lines.append(f"cmu installed on {host} with autosync every {every_minutes} min")
+    lines.append(f"sburn installed on {host} with autosync every {every_minutes} min")
     return lines
 
 
@@ -303,6 +316,6 @@ def uninstall(host: str, ssh_options: Optional[list[str]] = None, run=_ssh) -> l
         run(host, ["bash", "-s"], uninstall_script().encode(), ssh_options or [])
     except subprocess.CalledProcessError as e:
         if e.returncode == NOTHING_TO_REMOVE:
-            return [f"no cmu install found on {host}; nothing removed"]
+            return [f"no sburn install found on {host}; nothing removed"]
         raise
-    return [f"cmu removed from {host}"]
+    return [f"sburn removed from {host}"]

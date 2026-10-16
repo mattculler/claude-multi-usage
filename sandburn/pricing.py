@@ -19,7 +19,7 @@ LITELLM_PRICING_URL = (
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 )
 
-CACHE_DIR = Path.home() / ".claude-multi-usage"
+CACHE_DIR = Path.home() / ".sandburn"
 PRICING_CACHE_FILE = CACHE_DIR / "pricing-cache.json"
 PRICING_CACHE_MAX_AGE_HOURS = 24
 
@@ -35,7 +35,7 @@ def _fetch_litellm_pricing() -> Optional[dict]:
     try:
         req = urllib.request.Request(
             LITELLM_PRICING_URL,
-            headers={"User-Agent": "claude-multi-usage"},
+            headers={"User-Agent": "sandburn"},
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             all_models = json.loads(resp.read())

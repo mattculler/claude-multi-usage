@@ -1,7 +1,7 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: cmu-server-ingress
+  name: sandburn-server-ingress
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
@@ -12,7 +12,7 @@ spec:
         paths:
           - backend:
               service:
-                name: cmu-server
+                name: sandburn-server
                 port:
                   number: 8000
             path: /
@@ -20,4 +20,4 @@ spec:
   tls:
     - hosts:
         - your-domain.example.com
-      secretName: cmu-server-tls
+      secretName: sandburn-server-tls

@@ -1,7 +1,7 @@
 import pytest
 
-from claude_multi_usage import pricing
-from claude_multi_usage.pricing import _match_model, _tiered_cost, calculate_model_cost, format_cost
+from sandburn import pricing
+from sandburn.pricing import _match_model, _tiered_cost, calculate_model_cost, format_cost
 
 
 def test_calculate_model_cost(fake_home):

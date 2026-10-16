@@ -1,7 +1,7 @@
 """Periodic background sync, installed per user.
 
-``cmu autosync install`` registers a scheduler job (a systemd user timer on
-Linux, a launchd agent on macOS) that runs ``cmu autosync run`` every few
+``sburn autosync install`` registers a scheduler job (a systemd user timer on
+Linux, a launchd agent on macOS) that runs ``sburn autosync run`` every few
 minutes. ``run`` fingerprints the local usage files and the sync settings
 and only talks to the server when the fingerprint differs from the one
 recorded at the last successful sync, so an idle machine stays silent.
@@ -26,12 +26,16 @@ from typing import Callable
 from . import parser as _parser
 from .config import get_alias, get_keys, get_server_url
 
-CACHE_DIR = Path.home() / ".claude-multi-usage"
+CACHE_DIR = Path.home() / ".sandburn"
 STATE_FILE = CACHE_DIR / "autosync-state.json"
 LOCK_FILE = CACHE_DIR / "autosync.lock"
 
-SYSTEMD_UNIT = "cmu-autosync"
-LAUNCHD_LABEL = "com.claude-multi-usage.autosync"
+SYSTEMD_UNIT = "sandburn-autosync"
+LAUNCHD_LABEL = "com.sandburn.autosync"
+# The job's names from before the tool was renamed (claude-multi-usage, command
+# cmu). install and uninstall remove it: it would keep calling the old command.
+LEGACY_SYSTEMD_UNIT = "cmu-autosync"
+LEGACY_LAUNCHD_LABEL = "com.claude-multi-usage.autosync"
 DEFAULT_EVERY_MINUTES = 15
 SYSTEMD_BOOTED_DIR = Path("/run/systemd/system")
 
@@ -101,7 +105,7 @@ def _now() -> str:
 
 
 def record_success(current: str | None = None) -> None:
-    """Remember that the current local state has been synced (plain `cmu sync`)."""
+    """Remember that the current local state has been synced (plain `sburn sync`)."""
     state = load_state()
     now = _now()
     state.update(
@@ -168,15 +172,15 @@ def run(sync: Callable[[], object], force: bool = False) -> str:
 
 
 def _command() -> list[str]:
-    """How the scheduler invokes cmu.
+    """How the scheduler invokes sburn.
 
     The console script next to this interpreter is preferred: unlike
     ``python -m`` it does not put the working directory on sys.path.
     """
-    script = Path(sys.executable).with_name("cmu")
+    script = Path(sys.executable).with_name("sburn")
     if script.exists():
         return [str(script), "autosync", "run", "--quiet"]
-    return [sys.executable, "-m", "claude_multi_usage.cli", "autosync", "run", "--quiet"]
+    return [sys.executable, "-m", "sandburn.cli", "autosync", "run", "--quiet"]
 
 
 def _systemd_env() -> dict:
@@ -269,12 +273,13 @@ def _install_systemd(every_minutes: int, linger: bool) -> list[str]:
     unit_dir = systemd_user_dir()
     unit_dir.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    lines = [f"removed the pre-rename {p}" for p in _remove_systemd_units(LEGACY_SYSTEMD_UNIT)]
     exec_start = " ".join(_quote_systemd(part) for part in _command())
     service = unit_dir / f"{SYSTEMD_UNIT}.service"
     timer = unit_dir / f"{SYSTEMD_UNIT}.timer"
     service.write_text(
         "[Unit]\n"
-        "Description=claude-multi-usage: sync local usage to the server when it changed\n"
+        "Description=sandburn: sync local usage to the server when it changed\n"
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
@@ -283,7 +288,7 @@ def _install_systemd(every_minutes: int, linger: bool) -> list[str]:
     )
     timer.write_text(
         "[Unit]\n"
-        f"Description=Run cmu autosync every {every_minutes} minutes\n"
+        f"Description=Run sburn autosync every {every_minutes} minutes\n"
         "\n"
         "[Timer]\n"
         # Relative to the timer's own activation, so it fires after every
@@ -302,7 +307,7 @@ def _install_systemd(every_minutes: int, linger: bool) -> list[str]:
         for p in (timer, service):
             p.unlink(missing_ok=True)
         raise
-    lines = [
+    lines += [
         f"installed {timer} (every {every_minutes} min)",
         "the timer runs while you are logged in",
     ]
@@ -328,24 +333,30 @@ def _quote_systemd(part: str) -> str:
     return part
 
 
-def _timer_stamp() -> Path:
+def _timer_stamp(unit: str = SYSTEMD_UNIT) -> Path:
     data_home = os.environ.get("XDG_DATA_HOME") or ""
     if not os.path.isabs(data_home):
         data_home = str(Path.home() / ".local" / "share")
-    return Path(data_home) / "systemd" / "timers" / f"stamp-{SYSTEMD_UNIT}.timer"
+    return Path(data_home) / "systemd" / "timers" / f"stamp-{unit}.timer"
+
+
+def _remove_systemd_units(unit: str, even_if_absent: bool = False) -> list[Path]:
+    """Disable the timer of ``unit`` and delete its unit files; returns the files removed."""
+    unit_dir = systemd_user_dir()
+    present = [p for p in (unit_dir / f"{unit}.timer", unit_dir / f"{unit}.service") if p.exists()]
+    if not present and not even_if_absent:
+        return []
+    _run(["systemctl", "--user", "disable", "--now", f"{unit}.timer"], check=False)
+    _run(["systemctl", "--user", "clean", "--what=state", f"{unit}.timer"], check=False)
+    _timer_stamp(unit).unlink(missing_ok=True)
+    for p in present:
+        p.unlink()
+    return present
 
 
 def _uninstall_systemd() -> list[str]:
-    unit_dir = systemd_user_dir()
-    _run(["systemctl", "--user", "disable", "--now", f"{SYSTEMD_UNIT}.timer"], check=False)
-    _run(["systemctl", "--user", "clean", "--what=state", f"{SYSTEMD_UNIT}.timer"], check=False)
-    _timer_stamp().unlink(missing_ok=True)
-    removed = []
-    for name in (f"{SYSTEMD_UNIT}.timer", f"{SYSTEMD_UNIT}.service"):
-        p = unit_dir / name
-        if p.exists():
-            p.unlink()
-            removed.append(str(p))
+    removed = _remove_systemd_units(SYSTEMD_UNIT, even_if_absent=True)
+    removed += _remove_systemd_units(LEGACY_SYSTEMD_UNIT)
     _run(["systemctl", "--user", "daemon-reload"], check=False)
     return [f"removed {p}" for p in removed] or ["nothing installed"]
 
@@ -355,6 +366,7 @@ def _install_launchd(every_minutes: int) -> list[str]:
     agents.mkdir(parents=True, exist_ok=True)
     plist = agents / f"{LAUNCHD_LABEL}.plist"
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    lines = [f"removed the pre-rename {p}" for p in _remove_launchd_agent(LEGACY_LAUNCHD_LABEL)]
     with open(plist, "wb") as f:
         plistlib.dump(
             {
@@ -368,7 +380,10 @@ def _install_launchd(every_minutes: int) -> list[str]:
             },
             f,
         )
-    lines = [f"installed {plist} (every {every_minutes} min)", f"log: {CACHE_DIR / 'autosync.log'}"]
+    lines += [
+        f"installed {plist} (every {every_minutes} min)",
+        f"log: {CACHE_DIR / 'autosync.log'}",
+    ]
     domain = _launchd_domain()
     _run(["launchctl", "bootout", domain, str(plist)], check=False)
     _wait_for_bootout(domain)
@@ -402,14 +417,23 @@ def _wait_for_bootout(domain: str, attempts: int = 20) -> None:
         time.sleep(0.25)
 
 
-def _uninstall_launchd() -> list[str]:
-    plist = launch_agents_dir() / f"{LAUNCHD_LABEL}.plist"
+def _remove_launchd_agent(label: str, even_if_absent: bool = False) -> list[Path]:
+    """Unload the agent ``label`` and delete its plist; returns the files removed."""
+    plist = launch_agents_dir() / f"{label}.plist"
+    if not plist.exists() and not even_if_absent:
+        return []
     for domain in (f"gui/{os.getuid()}", f"user/{os.getuid()}"):
         _run(["launchctl", "bootout", domain, str(plist)], check=False)
     if plist.exists():
         plist.unlink()
-        return [f"removed {plist}"]
-    return ["nothing installed"]
+        return [plist]
+    return []
+
+
+def _uninstall_launchd() -> list[str]:
+    removed = _remove_launchd_agent(LAUNCHD_LABEL, even_if_absent=True)
+    removed += _remove_launchd_agent(LEGACY_LAUNCHD_LABEL)
+    return [f"removed {p}" for p in removed] or ["nothing installed"]
 
 
 def describe_status(info: dict) -> list[str]:

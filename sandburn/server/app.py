@@ -17,28 +17,28 @@ _store: Store | None = None
 
 # Largest request body the server accepts. A full sync payload for a heavy
 # user is a few hundred KB, so anything bigger is a mistake or abuse.
-# Override with CMU_MAX_BODY_BYTES or `cmu server start --max-body-bytes`.
+# Override with SANDBURN_MAX_BODY_BYTES or `sburn server start --max-body-bytes`.
 DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024
 
 
 def get_store() -> Store:
     global _store
     if _store is None:
-        db_path = os.environ.get("CMU_DB_PATH", str(Path("/data") / "server.db"))
+        db_path = os.environ.get("SANDBURN_DB_PATH", str(Path("/data") / "server.db"))
         _store = Store(db_path=db_path)
     return _store
 
 
 def get_max_body_bytes() -> int:
-    raw = os.environ.get("CMU_MAX_BODY_BYTES")
+    raw = os.environ.get("SANDBURN_MAX_BODY_BYTES")
     if not raw:
         return DEFAULT_MAX_BODY_BYTES
     try:
         value = int(raw)
     except ValueError:
-        raise ValueError(f"CMU_MAX_BODY_BYTES must be an integer, got {raw!r}") from None
+        raise ValueError(f"SANDBURN_MAX_BODY_BYTES must be an integer, got {raw!r}") from None
     if value <= 0:
-        raise ValueError("CMU_MAX_BODY_BYTES must be positive")
+        raise ValueError("SANDBURN_MAX_BODY_BYTES must be positive")
     return value
 
 
@@ -123,14 +123,14 @@ def _with_connection_close(headers) -> list:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    get_max_body_bytes()  # fail at startup on a bad CMU_MAX_BODY_BYTES
+    get_max_body_bytes()  # fail at startup on a bad SANDBURN_MAX_BODY_BYTES
     get_store()
     yield
     if _store is not None:
         _store.close()
 
 
-app = FastAPI(title="Claude Multi Usage Server", lifespan=lifespan)
+app = FastAPI(title="Sandburn sync server", lifespan=lifespan)
 app.add_middleware(BodySizeLimitMiddleware)
 
 

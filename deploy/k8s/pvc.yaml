@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: cmu-server-data
+  name: sandburn-server-data
 spec:
   accessModes:
     - ReadWriteOnce

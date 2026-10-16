@@ -1,11 +1,13 @@
-"""Configuration management for claude-multi-usage."""
+"""Configuration management for sandburn."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".claude-multi-usage"
+CONFIG_DIR = Path.home() / ".sandburn"
+# Where everything lived before the tool was renamed from claude-multi-usage.
+LEGACY_CONFIG_DIR = Path.home() / ".claude-multi-usage"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
@@ -17,6 +19,24 @@ DEFAULT_CONFIG = {
 
 def _ensure_config_dir():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def migrate_legacy_dir() -> Path | None:
+    """Rename ~/.claude-multi-usage to ~/.sandburn, once, after the tool's rename.
+
+    The directory holds the settings, the session index, the pricing cache
+    and the autosync state, so one rename carries everything over. Nothing
+    happens once ~/.sandburn exists. Returns the old path when it was moved.
+    """
+    old, new = LEGACY_CONFIG_DIR, CONFIG_DIR
+    # A rename in place only, never a move across the tree.
+    if old.parent != new.parent or not old.is_dir() or new.exists():
+        return None
+    try:
+        old.rename(new)
+    except OSError:
+        return None
+    return old
 
 
 def load_config() -> dict:

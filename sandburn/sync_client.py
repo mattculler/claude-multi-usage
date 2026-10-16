@@ -1,6 +1,6 @@
 """Building and posting sync payloads to the server.
 
-Shared by ``cmu sync``, ``cmu autosync run`` and ``cmu import-claude-export``.
+Shared by ``sburn sync``, ``sburn autosync run`` and ``sburn import-claude-export``.
 """
 
 from __future__ import annotations
@@ -23,15 +23,15 @@ def require_server_config() -> tuple[str, list[dict]]:
     """Return (server_url, keys) or raise SyncError with a hint."""
     server_url = get_server_url()
     if not server_url:
-        raise SyncError("Server URL not configured.\nRun: cmu config server <url>")
+        raise SyncError("Server URL not configured.\nRun: sburn config server <url>")
     keys = get_keys()
     if not keys:
-        raise SyncError("No keys configured.\nRun: cmu config key add <your-key>")
+        raise SyncError("No keys configured.\nRun: sburn config key add <your-key>")
     return server_url, keys
 
 
 def build_sync_payload(key_values: list[str]) -> dict:
-    """The payload ``cmu sync`` sends for this machine."""
+    """The payload ``sburn sync`` sends for this machine."""
     data = load_usage_data()
     today_hourly = parse_today_hourly()
     now = datetime.now()
@@ -100,7 +100,7 @@ def post_payload(server_url: str, payload: dict) -> dict:
         req = urllib.request.Request(
             f"{server_url}/api/sync",
             data=body,
-            headers={"Content-Type": "application/json", "User-Agent": "cmu"},
+            headers={"Content-Type": "application/json", "User-Agent": "sburn"},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
