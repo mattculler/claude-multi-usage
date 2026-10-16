@@ -41,7 +41,7 @@ def make_summary_panel(data: UsageData, local: bool = True, costs: tuple | None 
 
     ``local`` means ``data`` describes this machine, so the cost estimate can
     be computed from the local session files.  For data that came from the
-    sync server (``cmu diff``) no cost is shown: the server carries no cost
+    sync server (``sburn diff``) no cost is shown: the server carries no cost
     data, and consulting the local cost cache would attribute this machine's
     spend to another device. ``costs`` is the result of ``get_costs()`` when
     the caller already has it.
@@ -302,7 +302,7 @@ def render_dashboard(
     """Render the full dashboard.
 
     ``local=False`` renders data that came from the sync server (the merged
-    ``cmu diff`` view): the local cost cache and local session files are not
+    ``sburn diff`` view): the local cost cache and local session files are not
     consulted, since they describe this machine rather than ``data``.
     """
     console = Console()

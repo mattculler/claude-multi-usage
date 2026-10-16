@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from claude_multi_usage import cli, config, remote
+from sandburn import cli, config, remote
 
 CHECKOUT = Path(remote.__file__).resolve().parent.parent
 
@@ -27,8 +27,8 @@ def _bash_syntax_ok(script: str) -> bool:
 def _make_checkout(tmp_path, git=False):
     src = tmp_path / "checkout"
     shutil.copytree(
-        CHECKOUT / "claude_multi_usage",
-        src / "claude_multi_usage",
+        CHECKOUT / "sandburn",
+        src / "sandburn",
         ignore=shutil.ignore_patterns("__pycache__"),
     )
     shutil.copy(CHECKOUT / "pyproject.toml", src / "pyproject.toml")
@@ -39,10 +39,10 @@ def _make_checkout(tmp_path, git=False):
     # junk that must never travel
     (src / ".venv" / "lib").mkdir(parents=True)
     (src / ".venv" / "lib" / "big.so").write_bytes(b"\0" * 1000)
-    (src / "claude_multi_usage" / "__pycache__").mkdir()
-    (src / "claude_multi_usage" / "__pycache__" / "cli.pyc").write_bytes(b"\0")
-    (src / "claude_multi_usage.egg-info").mkdir()
-    (src / "claude_multi_usage.egg-info" / "PKG-INFO").write_text("x")
+    (src / "sandburn" / "__pycache__").mkdir()
+    (src / "sandburn" / "__pycache__" / "cli.pyc").write_bytes(b"\0")
+    (src / "sandburn.egg-info").mkdir()
+    (src / "sandburn.egg-info" / "PKG-INFO").write_text("x")
     (src / ".env").write_text("SECRET=1")
     (src / "server.db").write_bytes(b"\0" * 10)
     (src / ".claude").mkdir()
@@ -57,18 +57,18 @@ def test_default_source_is_this_checkout():
 
 
 def test_default_source_falls_back_to_repository_url(monkeypatch, tmp_path):
-    monkeypatch.setattr(remote, "PACKAGE_DIR", tmp_path / "site-packages" / "claude_multi_usage")
+    monkeypatch.setattr(remote, "PACKAGE_DIR", tmp_path / "site-packages" / "sandburn")
 
     class Meta:
         def get_all(self, key):
             return (
-                ["Homepage, https://example.com/x", "Repository, https://github.com/me/cmu"]
+                ["Homepage, https://example.com/x", "Repository, https://github.com/me/sburn"]
                 if key == "Project-URL"
                 else None
             )
 
     monkeypatch.setattr(metadata, "metadata", lambda name: Meta())
-    assert remote.default_source() == "git+https://github.com/me/cmu"
+    assert remote.default_source() == "git+https://github.com/me/sburn"
 
     def missing(name):
         raise metadata.PackageNotFoundError(name)
@@ -88,7 +88,7 @@ def test_make_tarball_sends_only_source_files(tmp_path, git):
         names = tar.getnames()
     assert "src/pyproject.toml" in names
     assert "src/README.md" in names  # pyproject's readme=, which the build backend needs
-    assert "src/claude_multi_usage/cli.py" in names
+    assert "src/sandburn/cli.py" in names
     for bad in (".git", ".venv", "__pycache__", "egg-info", ".env", "server.db", ".claude", ".zip"):
         assert not any(bad in n for n in names), (bad, names)
     assert len(data) < 2_000_000
@@ -111,13 +111,17 @@ def test_install_script_is_valid_bash_and_configures_everything():
     assert "UV_NO_MODIFY_PATH=1 sh" in script
     assert 'tool install --quiet --reinstall --python 3.12 "$BASE/src"' in script
     assert 'rm -rf "$BASE/src"' not in script  # kept, so `uv tool upgrade` keeps working there
-    assert '"$CMU" config server http://10.0.0.5:8000' in script
+    assert '"$SBURN" config server http://10.0.0.5:8000' in script
     assert "config key add k1 'team key'" in script
     assert "config key add k2 ''" in script
     assert "config alias 'office box'" in script
     assert "autosync install --every 7 --linger" in script
     assert "autosync run --force" not in script  # install already performs the first sync
-    assert 'UV_TOOL_BIN_DIR="$BASE/bin"' in script  # never clobber someone else's ~/.local/bin/cmu
+    assert (
+        'UV_TOOL_BIN_DIR="$BASE/bin"' in script
+    )  # never clobber someone else's ~/.local/bin/sburn
+    assert "tool uninstall claude-multi-usage" in script  # the pre-rename install goes
+    assert 'rm -rf "$LEGACY_BASE"' in script and "LEGACY_BASE=~/.local/share/cmu" in script
     assert "pip install" not in script and "-m venv" not in script
 
     req = remote.install_script(
@@ -127,15 +131,15 @@ def test_install_script_is_valid_bash_and_configures_everything():
     assert "tool install --quiet --reinstall git+https://github.com/x/y.git" in req
     assert "--python" not in req and "config alias" not in req and "--linger" not in req
     assert _bash_syntax_ok(remote.uninstall_script())
-    assert "tool uninstall claude-multi-usage" in remote.uninstall_script()
+    assert "tool uninstall sandburn" in remote.uninstall_script()
     assert "autosync uninstall" in remote.uninstall_script()
 
 
 def test_install_streams_checkout_then_runs_script(tmp_path):
     src = tmp_path / "co"
-    (src / "claude_multi_usage").mkdir(parents=True)
+    (src / "sandburn").mkdir(parents=True)
     (src / "pyproject.toml").write_text("[project]\nname='x'\n")
-    (src / "claude_multi_usage" / "__init__.py").write_text("")
+    (src / "sandburn" / "__init__.py").write_text("")
     calls = []
 
     def fake_ssh(host, args, input_bytes, ssh_options):
@@ -156,7 +160,7 @@ def test_install_streams_checkout_then_runs_script(tmp_path):
     assert len(calls) == 2
     host, args, tarball, opts = calls[0]
     assert host == "alice@box" and opts == ["-p", "2222"]
-    assert args[:2] == ["bash", "-c"] and "tar -xzf - -C ~/.local/share/cmu" in args[2]
+    assert args[:2] == ["bash", "-c"] and "tar -xzf - -C ~/.local/share/sandburn" in args[2]
     with tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz") as tar:
         assert "src/pyproject.toml" in tar.getnames()
     host, args, script, _ = calls[1]
@@ -183,14 +187,14 @@ def test_install_from_requirement_sends_no_tarball():
 
 def test_uninstall_runs_script():
     calls = []
-    assert remote.uninstall("box", run=lambda *a: calls.append(a)) == ["cmu removed from box"]
+    assert remote.uninstall("box", run=lambda *a: calls.append(a)) == ["sburn removed from box"]
     assert calls[0][1] == ["bash", "-s"] and b"autosync uninstall" in calls[0][2]
 
     def nothing_there(*a):
         raise subprocess.CalledProcessError(remote.NOTHING_TO_REMOVE, ["ssh"])
 
     assert remote.uninstall("box", run=nothing_there) == [
-        "no cmu install found on box; nothing removed"
+        "no sburn install found on box; nothing removed"
     ]
 
     def ssh_broken(*a):
@@ -321,10 +325,10 @@ def test_cli_remote_install_reports_failures(fake_home, monkeypatch, code, text)
 
 def test_cli_remote_uninstall(fake_home, monkeypatch):
     monkeypatch.setattr(
-        remote, "uninstall", lambda host, ssh_options=None: [f"cmu removed from {host}"]
+        remote, "uninstall", lambda host, ssh_options=None: [f"sburn removed from {host}"]
     )
     r = CliRunner().invoke(cli.main, ["remote", "uninstall", "box"])
-    assert r.exit_code == 0 and "cmu removed from box" in r.output
+    assert r.exit_code == 0 and "sburn removed from box" in r.output
 
 
 @pytest.mark.parametrize(
@@ -364,7 +368,7 @@ def test_tarball_builds_with_uv(tmp_path):
     if res.returncode != 0 and "offline" in res.stderr.lower():
         pytest.skip("uv would need the network to build here")
     assert res.returncode == 0, res.stderr
-    assert list((tmp_path / "dist").glob("claude_multi_usage-*.whl"))
+    assert list((tmp_path / "dist").glob("sandburn-*.whl"))
 
 
 FAKE_UV = """#!/bin/sh
@@ -378,25 +382,30 @@ case "$*" in
     "tool dir --bin") echo "$BINDIR" ;;
     "tool install"*)
         if [ -n "${FAKE_UV_FAIL:-}" ]; then echo "fake uv: install failed" >&2; exit 1; fi
-        mkdir -p "$TOOLS/claude-multi-usage/bin" "$BINDIR"
-        for exe in cmu claude-multi-usage; do
-            target="$TOOLS/claude-multi-usage/bin/$exe"
+        mkdir -p "$TOOLS/sandburn/bin" "$BINDIR"
+        for exe in sburn sandburn; do
+            target="$TOOLS/sandburn/bin/$exe"
             if [ -e "$BINDIR/$exe" ] \\
                     && [ "$(readlink "$BINDIR/$exe" 2>/dev/null)" != "$target" ]; then
                 echo "error: Executable already exists: $exe (use --force to overwrite)" >&2
                 exit 2
             fi
         done
-        for exe in cmu claude-multi-usage; do
-            target="$TOOLS/claude-multi-usage/bin/$exe"
-            printf '%s\\n' '#!/bin/sh' 'echo "cmu $*" >> "$HOME/cmu.log"' \\
-                '[ "$1" = --version ] && echo "cmu, version 0.0.0"' 'exit 0' > "$target"
+        for exe in sburn sandburn; do
+            target="$TOOLS/sandburn/bin/$exe"
+            printf '%s\\n' '#!/bin/sh' 'echo "sburn $*" >> "$HOME/sburn.log"' \\
+                '[ "$1" = --version ] && echo "sburn, version 0.0.0"' 'exit 0' > "$target"
             chmod +x "$target"
             ln -sfn "$target" "$BINDIR/$exe"
         done ;;
     "tool uninstall"*)
-        rm -rf "${TOOLS:?}/claude-multi-usage"
-        for exe in cmu claude-multi-usage; do rm -f "${BINDIR:?}/${exe:?}"; done ;;
+        name=$3
+        [ -d "$TOOLS/$name" ] || { echo "error: $name is not installed" >&2; exit 2; }
+        for target in "$TOOLS/$name/bin"/*; do
+            link="$BINDIR/${target##*/}"
+            if [ "$(readlink "$link" 2>/dev/null)" = "$target" ]; then rm -f "$link"; fi
+        done
+        rm -rf "${TOOLS:?}/${name:?}" ;;
     *) echo "fake uv: unexpected call: $*" >&2; exit 99 ;;
 esac
 """
@@ -458,11 +467,34 @@ def fake_remote(tmp_path, monkeypatch):
         f = home / name
         return f.read_text() if f.exists() else ""
 
+    def install_legacy_tool():
+        """What `uv tool install claude-multi-usage` left behind before the rename."""
+        tool_dir = home / ".local/share/uv/tools/claude-multi-usage/bin"
+        tool_dir.mkdir(parents=True)
+        for exe in ("cmu", "claude-multi-usage"):
+            target = tool_dir / exe
+            target.write_text('#!/bin/sh\necho "cmu $*" >> "$HOME/cmu.log"\nexit 0\n')
+            target.chmod(0o755)
+            (home / ".local" / "bin" / exe).symlink_to(target)
+        return tool_dir / "cmu"
+
+    def install_venv_era(script='#!/bin/sh\necho "cmu $*" >> "$HOME/cmu.log"\n'):
+        """What the venv-based installer before that left behind."""
+        old = home / ".local/share/cmu/venv/bin/cmu"
+        old.parent.mkdir(parents=True)
+        old.write_text(script)
+        old.chmod(0o755)
+        (home / ".local" / "bin" / "cmu").symlink_to(old)
+        return old
+
     return types.SimpleNamespace(
         home=home,
         bin=home / ".local" / "bin",
-        base=home / ".local" / "share" / "cmu",
-        tool_cmu=home / ".local/share/uv/tools/claude-multi-usage/bin/cmu",
+        base=home / ".local" / "share" / "sandburn",
+        legacy_base=home / ".local" / "share" / "cmu",
+        install_legacy_tool=install_legacy_tool,
+        install_venv_era=install_venv_era,
+        tool_sburn=home / ".local/share/uv/tools/sandburn/bin/sburn",
         make_uv=make_uv,
         run=run,
         log=log,
@@ -514,7 +546,7 @@ def test_script_fails_clearly_without_curl_or_wget(fake_remote):
     assert "curl or wget is needed" in res.stderr
 
 
-@pytest.mark.parametrize("foreign", ["cmu", "claude-multi-usage"])
+@pytest.mark.parametrize("foreign", ["sburn", "sandburn"])
 def test_script_never_clobbers_a_foreign_command(fake_remote, foreign):
     fake_remote.make_uv(fake_remote.bin / "uv")
     (fake_remote.bin / foreign).write_text("#!/bin/sh\necho foreign\n")
@@ -523,47 +555,45 @@ def test_script_never_clobbers_a_foreign_command(fake_remote, foreign):
     assert res.returncode == 0, res.stderr
     assert f"{foreign} exists and is not ours" in res.stdout
     assert (fake_remote.bin / foreign).read_text() == "#!/bin/sh\necho foreign\n"
-    assert os.readlink(fake_remote.base / "bin" / "cmu") == str(fake_remote.tool_cmu)
+    assert os.readlink(fake_remote.base / "bin" / "sburn") == str(fake_remote.tool_sburn)
     assert f"UV_TOOL_BIN_DIR={fake_remote.base / 'bin'}" in fake_remote.log("uv.log")
 
 
-def test_script_replaces_a_venv_era_install(fake_remote):
+@pytest.mark.parametrize("kind", ["uv tool", "venv"])
+def test_script_removes_a_pre_rename_install(fake_remote, kind):
     fake_remote.make_uv(fake_remote.bin / "uv")
-    old = fake_remote.base / "venv" / "bin" / "cmu"
-    old.parent.mkdir(parents=True)
-    old.write_text("#!/bin/sh\n")
-    old.chmod(0o755)
-    (fake_remote.bin / "cmu").symlink_to(old)
+    old = fake_remote.install_legacy_tool() if kind == "uv tool" else fake_remote.install_venv_era()
     res = fake_remote.run(_install())
     assert res.returncode == 0, res.stderr
     assert "not ours" not in res.stdout
-    assert not (fake_remote.base / "venv").exists()
-    assert os.readlink(fake_remote.bin / "cmu") == str(fake_remote.tool_cmu)
+    assert not old.exists() and not fake_remote.legacy_base.exists()
+    assert not (fake_remote.bin / "cmu").is_symlink() and not (fake_remote.bin / "cmu").exists()
+    assert os.readlink(fake_remote.bin / "sburn") == str(fake_remote.tool_sburn)
+    assert ("removed the pre-rename claude-multi-usage tool" in res.stdout) == (kind == "uv tool")
+    assert fake_remote.log("cmu.log") == ""  # the old command is never run
 
 
-def test_script_keeps_a_venv_era_install_when_the_new_install_fails(fake_remote):
+@pytest.mark.parametrize("kind", ["uv tool", "venv"])
+def test_script_keeps_a_pre_rename_install_when_the_new_install_fails(fake_remote, kind):
     fake_remote.make_uv(fake_remote.bin / "uv")
-    old = fake_remote.base / "venv" / "bin" / "cmu"
-    old.parent.mkdir(parents=True)
-    old.write_text("#!/bin/sh\n")
-    old.chmod(0o755)
-    (fake_remote.bin / "cmu").symlink_to(old)
+    old = fake_remote.install_legacy_tool() if kind == "uv tool" else fake_remote.install_venv_era()
     res = fake_remote.run(_install(), FAKE_UV_FAIL="1")
     assert res.returncode != 0 and "install failed" in res.stderr
     assert old.exists()  # the old install still works...
     assert os.readlink(fake_remote.bin / "cmu") == str(old)  # ...and is still on PATH
+    assert "tool uninstall" not in fake_remote.log("uv.log")
 
 
 def test_script_configures_then_schedules(fake_remote):
     fake_remote.make_uv(fake_remote.bin / "uv")
     res = fake_remote.run(_install())
     assert res.returncode == 0, res.stderr
-    assert fake_remote.log("cmu.log").splitlines() == [
-        "cmu config server http://10.0.0.5:8000",
-        "cmu config key add k1 team",
-        "cmu config alias box",
-        "cmu autosync install --every 7 --linger",
-        "cmu autosync status",
+    assert fake_remote.log("sburn.log").splitlines() == [
+        "sburn config server http://10.0.0.5:8000",
+        "sburn config key add k1 team",
+        "sburn config alias box",
+        "sburn autosync install --every 7 --linger",
+        "sburn autosync status",
     ]
     assert f"tool install --quiet --reinstall {fake_remote.base / 'src'}" in fake_remote.log(
         "uv.log"
@@ -573,42 +603,57 @@ def test_script_configures_then_schedules(fake_remote):
 def test_uninstall_script_removes_a_uv_tool_install(fake_remote):
     fake_remote.make_uv(fake_remote.bin / "uv")
     assert fake_remote.run(_install()).returncode == 0
+    (fake_remote.home / ".sandburn").mkdir()  # what the first sburn run leaves
     res = fake_remote.run(remote.uninstall_script())
     assert res.returncode == 0, res.stderr
-    assert "removed cmu (uv tool)" in res.stdout and "~/.claude-multi-usage" in res.stdout
-    assert "cmu autosync uninstall" in fake_remote.log("cmu.log")
-    assert "tool uninstall claude-multi-usage" in fake_remote.log("uv.log")
-    assert not fake_remote.base.exists() and not (fake_remote.bin / "cmu").exists()
+    assert "removed sandburn and its autosync job" in res.stdout
+    assert f"kept: the config in {fake_remote.home / '.sandburn'}, and uv" in res.stdout
+    assert "sburn autosync uninstall" in fake_remote.log("sburn.log")
+    assert "tool uninstall sandburn" in fake_remote.log("uv.log")
+    assert not fake_remote.base.exists() and not (fake_remote.bin / "sburn").exists()
 
 
-def test_uninstall_script_removes_a_venv_era_install(fake_remote):
-    old = fake_remote.base / "venv" / "bin" / "cmu"
-    old.parent.mkdir(parents=True)
-    old.write_text('#!/bin/sh\necho "old-cmu $*" >> "$HOME/cmu.log"\n')
-    old.chmod(0o755)
-    (fake_remote.bin / "cmu").symlink_to(old)
+@pytest.mark.parametrize("kind", ["uv tool", "venv"])
+def test_uninstall_script_removes_a_pre_rename_install(fake_remote, kind):
+    fake_remote.make_uv(fake_remote.bin / "uv")
+    old = fake_remote.install_legacy_tool() if kind == "uv tool" else fake_remote.install_venv_era()
+    (fake_remote.home / ".claude-multi-usage").mkdir()  # sburn never ran here
     res = fake_remote.run(remote.uninstall_script())
     assert res.returncode == 0, res.stderr
-    assert "removed cmu (venv)" in res.stdout
-    assert "old-cmu autosync uninstall" in fake_remote.log("cmu.log")
-    assert not fake_remote.base.exists()
+    assert f"removed claude-multi-usage ({kind}) and its autosync job" in res.stdout
+    assert f"kept: the config in {fake_remote.home / '.claude-multi-usage'}, and uv" in res.stdout
+    assert ".sandburn" not in res.stdout
+    assert (
+        fake_remote.log("cmu.log") == "cmu autosync uninstall\n"
+    )  # the old command removes its job
+    assert not old.exists() and not fake_remote.legacy_base.exists()
     assert not (fake_remote.bin / "cmu").is_symlink() and not (fake_remote.bin / "cmu").exists()
 
 
+def test_uninstall_script_removes_a_pre_rename_install_next_to_the_current_one(fake_remote):
+    fake_remote.make_uv(fake_remote.bin / "uv")
+    assert fake_remote.run(_install()).returncode == 0
+    old = fake_remote.install_legacy_tool()
+    res = fake_remote.run(remote.uninstall_script())
+    assert res.returncode == 0, res.stderr
+    assert "removed sandburn, claude-multi-usage (uv tool) and its autosync job" in res.stdout
+    assert "sburn autosync uninstall" in fake_remote.log("sburn.log")
+    assert fake_remote.log("cmu.log") == ""  # sburn's uninstall covers the old job too
+    assert not old.exists() and not (fake_remote.bin / "cmu").exists()
+
+
 def test_uninstall_script_reports_a_job_it_could_not_remove(fake_remote):
-    old = fake_remote.base / "venv" / "bin" / "cmu"
-    old.parent.mkdir(parents=True)
-    old.write_text("#!/bin/sh\nexit 1\n")  # e.g. the venv's interpreter is gone
-    old.chmod(0o755)
+    fake_remote.install_venv_era("#!/bin/sh\nexit 1\n")  # e.g. the venv's interpreter is gone
     res = fake_remote.run(remote.uninstall_script())
     assert res.returncode == 0, res.stderr
     assert "autosync job could not be removed" in res.stderr
-    assert "systemctl --user disable --now cmu-autosync.timer" in res.stderr
+    assert "systemctl --user disable --now sandburn-autosync.timer" in res.stderr
     assert "launchctl bootout" in res.stderr
+    assert "cmu-autosync and com.claude-multi-usage.autosync" in res.stderr
     assert "and its autosync job" not in res.stdout
 
 
 def test_uninstall_script_warns_when_nothing_is_installed(fake_remote):
     res = fake_remote.run(remote.uninstall_script())
     assert res.returncode == remote.NOTHING_TO_REMOVE
-    assert "no cmu install found" in res.stderr
+    assert "no sburn install found" in res.stderr

@@ -2,7 +2,7 @@
 
 The index stores token counts per message; prices are applied here, at read
 time, with whatever pricing table is current. There is therefore nothing to
-invalidate when prices change. ``cmu cost --rebuild`` re-reads the session
+invalidate when prices change. ``sburn cost --rebuild`` re-reads the session
 files themselves (for example after a time zone change).
 """
 

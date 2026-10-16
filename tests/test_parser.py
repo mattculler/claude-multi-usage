@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from claude_multi_usage import cost_cache, parser
-from claude_multi_usage.parser import _deduplicate_project_name
+from sandburn import cost_cache, parser
+from sandburn.parser import _deduplicate_project_name
 
 
 def test_today_usage_counts_each_message_once(fake_home):
@@ -208,7 +208,7 @@ def test_cost_cache_agrees_with_parser(fake_home):
     assert set(daily) == {fake_home.today, fake_home.yday}
     assert cost_cache.get_costs()[1] == pytest.approx(total)
     assert cost_cache.day_cost(fake_home.yday) == pytest.approx(fake_home.yday_cost)
-    assert (fake_home.home / ".claude-multi-usage" / "index.db").exists()
+    assert (fake_home.home / ".sandburn" / "index.db").exists()
 
 
 def test_load_usage_data(fake_home):

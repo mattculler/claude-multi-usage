@@ -3,7 +3,7 @@ requires = ["uv_build>=0.9,<1"]
 build-backend = "uv_build"
 
 [project]
-name = "claude-multi-usage"
+name = "sandburn"
 version = "1.2.0"
 description = "Claude Code usage dashboard across multiple devices"
 readme = "README.md"
@@ -36,14 +36,16 @@ server = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
 ]
+# Development happens on Forgejo; GitHub is a mirror, and the one `uv tool
+# install` can reach from anywhere (`sburn remote install` falls back to it).
 [project.urls]
-Homepage = "https://github.com/mattculler/claude-multi-usage"
-Repository = "https://github.com/mattculler/claude-multi-usage"
-Issues = "https://github.com/mattculler/claude-multi-usage/issues"
+Homepage = "https://github.com/mattculler/sandburn"
+Repository = "https://github.com/mattculler/sandburn"
+Issues = "https://github.com/mattculler/sandburn/issues"
 
 [project.scripts]
-cmu = "claude_multi_usage.cli:main"
-claude-multi-usage = "claude_multi_usage.cli:main"
+sburn = "sandburn.cli:main"
+sandburn = "sandburn.cli:main"
 
 [dependency-groups]
 dev = [

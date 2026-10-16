@@ -247,7 +247,7 @@ def _project_of(conv: dict, names: dict) -> str:
 def summarize_export(
     export: dict[str, Any], keys: list[str], alias: str | None = None, now: datetime | None = None
 ) -> dict[str, Any]:
-    """Build a sync payload (see ``cmu sync``) for the account's pseudo-device.
+    """Build a sync payload (see ``sburn sync``) for the account's pseudo-device.
 
     Days are bucketed in the local time zone of the machine running the
     import. The payload is a snapshot: the server replaces the device.

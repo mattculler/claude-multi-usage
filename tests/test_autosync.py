@@ -8,20 +8,14 @@ import urllib.request
 import pytest
 from click.testing import CliRunner
 
-from claude_multi_usage import autosync, cli, config
+from sandburn import autosync, cli, config
 
 
 @pytest.fixture
 def auto_env(fake_home, monkeypatch):
-    cmu_dir = fake_home.home / ".claude-multi-usage"
-    monkeypatch.setattr(autosync, "CACHE_DIR", cmu_dir)
-    monkeypatch.setattr(autosync, "STATE_FILE", cmu_dir / "autosync-state.json")
-    monkeypatch.setattr(autosync, "LOCK_FILE", cmu_dir / "autosync.lock")
     monkeypatch.setattr(autosync, "systemd_user_dir", lambda: fake_home.home / "systemd-user")
     monkeypatch.setattr(autosync, "launch_agents_dir", lambda: fake_home.home / "LaunchAgents")
-    monkeypatch.setattr(
-        autosync, "_timer_stamp", lambda: fake_home.home / "timers" / "stamp-cmu-autosync.timer"
-    )
+    monkeypatch.setenv("XDG_DATA_HOME", str(fake_home.home / "data"))  # the timer stamps
     calls = []
     results = {}
 
@@ -132,20 +126,20 @@ def test_state_survives_corrupt_file(auto_env):
 def test_install_systemd_writes_units_and_enables_timer(auto_env, monkeypatch):
     monkeypatch.setattr(autosync, "backend", lambda: "systemd")
     monkeypatch.setattr(
-        autosync, "_command", lambda: ["/opt/my venv/bin/cmu", "autosync", "run", "--quiet"]
+        autosync, "_command", lambda: ["/opt/my venv/bin/sburn", "autosync", "run", "--quiet"]
     )
     lines = autosync.install(every_minutes=7)
     unit_dir = autosync.systemd_user_dir()
-    service = (unit_dir / "cmu-autosync.service").read_text()
-    timer = (unit_dir / "cmu-autosync.timer").read_text()
-    assert 'ExecStart="/opt/my venv/bin/cmu" autosync run --quiet' in service
+    service = (unit_dir / "sandburn-autosync.service").read_text()
+    timer = (unit_dir / "sandburn-autosync.timer").read_text()
+    assert 'ExecStart="/opt/my venv/bin/sburn" autosync run --quiet' in service
     assert "Type=oneshot" in service and "WorkingDirectory=" in service
     assert "OnActiveSec=1min" in timer and "OnUnitActiveSec=7min" in timer
     assert "OnBootSec" not in timer and "Persistent" not in timer  # see the comment in the unit
     assert "WantedBy=timers.target" in timer
     assert auto_env.calls == [
         ["systemctl", "--user", "daemon-reload"],
-        ["systemctl", "--user", "enable", "--now", "cmu-autosync.timer"],
+        ["systemctl", "--user", "enable", "--now", "sandburn-autosync.timer"],
     ]
     assert any("every 7 min" in line for line in lines)
     assert any("enable-linger" in line for line in lines)
@@ -158,11 +152,17 @@ def test_install_systemd_writes_units_and_enables_timer(auto_env, monkeypatch):
     stamp.parent.mkdir(parents=True)
     stamp.write_text("")
     removed = autosync.uninstall()
-    assert not (unit_dir / "cmu-autosync.timer").exists()
+    assert not (unit_dir / "sandburn-autosync.timer").exists()
     assert not stamp.exists()
     assert any("removed" in line for line in removed)
-    assert ["systemctl", "--user", "disable", "--now", "cmu-autosync.timer"] in auto_env.calls
-    assert ["systemctl", "--user", "clean", "--what=state", "cmu-autosync.timer"] in auto_env.calls
+    assert ["systemctl", "--user", "disable", "--now", "sandburn-autosync.timer"] in auto_env.calls
+    assert [
+        "systemctl",
+        "--user",
+        "clean",
+        "--what=state",
+        "sandburn-autosync.timer",
+    ] in auto_env.calls
     assert not autosync.status()["installed"]
 
 
@@ -181,8 +181,8 @@ def test_generated_units_pass_systemd_analyze(auto_env, monkeypatch):
             "systemd-analyze",
             "--user",
             "verify",
-            str(unit_dir / "cmu-autosync.timer"),
-            str(unit_dir / "cmu-autosync.service"),
+            str(unit_dir / "sandburn-autosync.timer"),
+            str(unit_dir / "sandburn-autosync.service"),
         ],
         capture_output=True,
         text=True,
@@ -202,7 +202,7 @@ def test_failed_systemctl_leaves_nothing_behind(auto_env, monkeypatch):
     auto_env.results[("systemctl", "--user", "daemon-reload")] = (1, "Failed to connect to bus")
     with pytest.raises(subprocess.CalledProcessError):
         autosync.install()
-    assert not (autosync.systemd_user_dir() / "cmu-autosync.timer").exists()
+    assert not (autosync.systemd_user_dir() / "sandburn-autosync.timer").exists()
     assert not autosync.status()["installed"]
 
 
@@ -241,12 +241,12 @@ def test_systemd_user_dir_ignores_empty_or_relative_xdg(monkeypatch):
 def test_install_launchd_writes_plist_into_gui_domain(auto_env, monkeypatch):
     monkeypatch.setattr(autosync, "backend", lambda: "launchd")
     monkeypatch.setattr(autosync.os, "getuid", lambda: 501)
-    auto_env.results[("launchctl", "print", "gui/501/com.claude-multi-usage.autosync")] = (
+    auto_env.results[("launchctl", "print", "gui/501/com.sandburn.autosync")] = (
         113,
         "not found",
     )
     lines = autosync.install(every_minutes=10)
-    plist = autosync.launch_agents_dir() / "com.claude-multi-usage.autosync.plist"
+    plist = autosync.launch_agents_dir() / "com.sandburn.autosync.plist"
     with open(plist, "rb") as f:
         data = plistlib.load(f)
     assert data["ProgramArguments"][-3:] == ["autosync", "run", "--quiet"]
@@ -266,16 +266,16 @@ def test_install_launchd_without_console_login(auto_env, monkeypatch):
     monkeypatch.setattr(autosync, "backend", lambda: "launchd")
     monkeypatch.setattr(autosync.os, "getuid", lambda: 501)
     auto_env.results[("launchctl", "print", "gui/501")] = (1, "Could not find domain")
-    auto_env.results[("launchctl", "print", "user/501/com.claude-multi-usage.autosync")] = (113, "")
+    auto_env.results[("launchctl", "print", "user/501/com.sandburn.autosync")] = (113, "")
     auto_env.results[("launchctl", "bootstrap", "user/501")] = (5, "Input/output error")
     lines = autosync.install(every_minutes=10)
-    assert (autosync.launch_agents_dir() / "com.claude-multi-usage.autosync.plist").exists()
+    assert (autosync.launch_agents_dir() / "com.sandburn.autosync.plist").exists()
     assert any("starts at the next login" in line for line in lines)
     assert [
         "launchctl",
         "bootstrap",
         "user/501",
-        str(autosync.launch_agents_dir() / "com.claude-multi-usage.autosync.plist"),
+        str(autosync.launch_agents_dir() / "com.sandburn.autosync.plist"),
     ] in auto_env.calls
 
 
@@ -311,13 +311,13 @@ def test_scheduler_prefers_the_console_script(monkeypatch, tmp_path):
     assert autosync._command() == [
         str(exe),
         "-m",
-        "claude_multi_usage.cli",
+        "sandburn.cli",
         "autosync",
         "run",
         "--quiet",
     ]
-    (exe.parent / "cmu").write_text("")
-    assert autosync._command() == [str(exe.parent / "cmu"), "autosync", "run", "--quiet"]
+    (exe.parent / "sburn").write_text("")
+    assert autosync._command() == [str(exe.parent / "sburn"), "autosync", "run", "--quiet"]
 
 
 # -- CLI ------------------------------------------------------------------------
@@ -405,7 +405,7 @@ def test_cli_autosync_install_needs_config(auto_env, monkeypatch):
     monkeypatch.setattr(autosync, "backend", lambda: "systemd")
     r = CliRunner().invoke(cli.main, ["autosync", "install"])
     assert r.exit_code == 1 and "Server URL not configured" in r.output
-    assert not (autosync.systemd_user_dir() / "cmu-autosync.timer").exists()
+    assert not (autosync.systemd_user_dir() / "sandburn-autosync.timer").exists()
 
 
 def test_cli_autosync_install_reports_systemctl_failure(auto_env, monkeypatch):
@@ -415,3 +415,94 @@ def test_cli_autosync_install_reports_systemctl_failure(auto_env, monkeypatch):
     auto_env.results[("systemctl", "--user", "daemon-reload")] = (1, "Failed to connect to bus")
     r = CliRunner().invoke(cli.main, ["autosync", "install"])
     assert r.exit_code == 1 and "Failed to connect to bus" in r.output
+
+
+# -- the job from before the rename (cmu-autosync, com.claude-multi-usage.autosync)
+
+
+def test_install_systemd_replaces_the_pre_rename_timer(auto_env, monkeypatch):
+    monkeypatch.setattr(autosync, "backend", lambda: "systemd")
+    unit_dir = autosync.systemd_user_dir()
+    unit_dir.mkdir(parents=True)
+    old_timer = unit_dir / "cmu-autosync.timer"
+    old_service = unit_dir / "cmu-autosync.service"
+    old_timer.write_text("[Timer]\n")
+    old_service.write_text("[Service]\n")
+    stamp = autosync._timer_stamp("cmu-autosync")
+    stamp.parent.mkdir(parents=True)
+    stamp.write_text("")
+    lines = autosync.install(every_minutes=5)
+    assert any("pre-rename" in line and "cmu-autosync.timer" in line for line in lines)
+    assert not old_timer.exists() and not old_service.exists() and not stamp.exists()
+    assert (unit_dir / "sandburn-autosync.timer").exists()
+    assert ["systemctl", "--user", "disable", "--now", "cmu-autosync.timer"] in auto_env.calls
+    # with nothing old around, the old name is never mentioned to systemd
+    auto_env.calls.clear()
+    assert not any("pre-rename" in line for line in autosync.install(every_minutes=5))
+    assert not any("cmu-autosync" in part for cmd in auto_env.calls for part in cmd)
+
+
+def test_uninstall_systemd_removes_the_pre_rename_units_too(auto_env, monkeypatch):
+    monkeypatch.setattr(autosync, "backend", lambda: "systemd")
+    unit_dir = autosync.systemd_user_dir()
+    unit_dir.mkdir(parents=True)
+    (unit_dir / "cmu-autosync.timer").write_text("[Timer]\n")
+    (unit_dir / "cmu-autosync.service").write_text("[Service]\n")
+    assert autosync.uninstall() == [
+        f"removed {unit_dir / 'cmu-autosync.timer'}",
+        f"removed {unit_dir / 'cmu-autosync.service'}",
+    ]
+    assert ["systemctl", "--user", "disable", "--now", "cmu-autosync.timer"] in auto_env.calls
+    assert not any(unit_dir.iterdir())
+
+
+def test_install_launchd_replaces_the_pre_rename_agent(auto_env, monkeypatch):
+    monkeypatch.setattr(autosync, "backend", lambda: "launchd")
+    monkeypatch.setattr(autosync.os, "getuid", lambda: 501)
+    auto_env.results[("launchctl", "print", "gui/501/com.sandburn.autosync")] = (113, "")
+    agents = autosync.launch_agents_dir()
+    agents.mkdir(parents=True)
+    old = agents / "com.claude-multi-usage.autosync.plist"
+    old.write_bytes(b"")
+    lines = autosync.install(every_minutes=5)
+    assert any("pre-rename" in line and str(old) in line for line in lines)
+    assert not old.exists() and (agents / "com.sandburn.autosync.plist").exists()
+    assert ["launchctl", "bootout", "gui/501", str(old)] in auto_env.calls
+
+
+def test_uninstall_launchd_removes_the_pre_rename_agent_too(auto_env, monkeypatch):
+    monkeypatch.setattr(autosync, "backend", lambda: "launchd")
+    monkeypatch.setattr(autosync.os, "getuid", lambda: 501)
+    agents = autosync.launch_agents_dir()
+    agents.mkdir(parents=True)
+    old = agents / "com.claude-multi-usage.autosync.plist"
+    old.write_bytes(b"")
+    assert autosync.uninstall() == [f"removed {old}"]
+    assert ["launchctl", "bootout", "gui/501", str(old)] in auto_env.calls
+    assert not old.exists()
+
+
+def test_status_reports_the_pre_rename_job(auto_env, monkeypatch):
+    monkeypatch.setattr(autosync, "backend", lambda: "systemd")
+    unit_dir = autosync.systemd_user_dir()
+    unit_dir.mkdir(parents=True)
+    old = unit_dir / "cmu-autosync.timer"
+    old.write_text("[Timer]\n")
+    info = autosync.status()
+    assert not info["installed"] and info["legacy"] == [str(old)]
+    assert any("pre-rename job still installed" in line for line in autosync.describe_status(info))
+    old.unlink()
+    assert autosync.status()["legacy"] == []
+
+
+def test_first_run_notice_mentions_the_pre_rename_job(auto_env):
+    old_dir = auto_env.home / ".claude-multi-usage"
+    old_dir.mkdir()
+    (old_dir / "config.json").write_text("{}")
+    unit_dir = autosync.systemd_user_dir()
+    unit_dir.mkdir(parents=True)
+    (unit_dir / "cmu-autosync.timer").write_text("[Timer]\n")
+    result = CliRunner().invoke(cli.main, ["config", "show"])
+    assert result.exit_code == 0, result.output
+    assert "moved" in result.output
+    assert "pre-rename autosync job is still installed" in result.output

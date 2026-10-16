@@ -1,9 +1,12 @@
+import errno
 import json
 import urllib.request
+from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
-from claude_multi_usage import cli, config
+from sandburn import cli, config
 
 
 class _FakeResponse:
@@ -77,8 +80,8 @@ def test_server_start_options(fake_home, monkeypatch):
     )
     # The command writes os.environ directly; setenv (not delenv) makes
     # monkeypatch restore the original absence of these variables afterwards.
-    monkeypatch.setenv("CMU_MAX_BODY_BYTES", "placeholder")
-    monkeypatch.setenv("CMU_DB_PATH", "placeholder")
+    monkeypatch.setenv("SANDBURN_MAX_BODY_BYTES", "placeholder")
+    monkeypatch.setenv("SANDBURN_DB_PATH", "placeholder")
 
     assert CliRunner().invoke(cli.main, ["server", "start", "--max-body-bytes", "0"]).exit_code == 2
 
@@ -98,9 +101,9 @@ def test_server_start_options(fake_home, monkeypatch):
         ],
     )
     assert result.exit_code == 0, result.output
-    assert os.environ["CMU_MAX_BODY_BYTES"] == "500"
-    assert os.environ["CMU_DB_PATH"] == "x.db"
-    assert calls == [(("claude_multi_usage.server.app:app",), {"host": "10.0.0.5", "port": 9000})]
+    assert os.environ["SANDBURN_MAX_BODY_BYTES"] == "500"
+    assert os.environ["SANDBURN_DB_PATH"] == "x.db"
+    assert calls == [(("sandburn.server.app:app",), {"host": "10.0.0.5", "port": 9000})]
 
 
 def test_sync_without_config_fails_cleanly(fake_home):
@@ -230,3 +233,52 @@ def test_sync_reports_malformed_server_url(fake_home, monkeypatch):
     config.set_server_url("http://host:80a")
     result = CliRunner().invoke(cli.main, ["sync"])
     assert result.exit_code == 1 and "Sync failed" in result.output
+
+
+def test_first_run_moves_the_pre_rename_config_dir(fake_home):
+    old = fake_home.home / ".claude-multi-usage"
+    old.mkdir()
+    (old / "config.json").write_text(json.dumps({"server_url": "http://10.0.0.5:8000"}))
+    (old / "autosync-state.json").write_text("{}")
+    result = CliRunner().invoke(cli.main, ["config", "show"])
+    assert result.exit_code == 0, result.output
+    assert "moved" in result.output and "claude-multi-usage is now sandburn" in result.output
+    assert not old.exists()
+    assert config.get_server_url() == "http://10.0.0.5:8000"
+    assert (config.CONFIG_DIR / "autosync-state.json").exists()
+    # nothing left to do on the next run
+    assert "moved" not in CliRunner().invoke(cli.main, ["config", "show"]).output
+
+
+def test_pre_rename_config_dir_is_left_alone_once_the_new_one_exists(fake_home, monkeypatch):
+    old = fake_home.home / ".claude-multi-usage"
+    old.mkdir()
+    (old / "config.json").write_text(json.dumps({"server_url": "http://old"}))
+    config.set_server_url("http://new")
+    monkeypatch.setattr(Path, "rename", lambda *a: pytest.fail("rename attempted"))
+    result = CliRunner().invoke(cli.main, ["config", "show"])
+    assert result.exit_code == 0 and "moved" not in result.output
+    assert old.exists() and config.get_server_url() == "http://new"
+
+
+def test_failed_config_dir_move_is_reported_not_hidden(fake_home, monkeypatch):
+    old = fake_home.home / ".claude-multi-usage"
+    old.mkdir()
+    (old / "config.json").write_text(json.dumps({"server_url": "http://old"}))
+
+    def busy(self, target):
+        raise OSError(errno.EBUSY, "Device or resource busy")  # e.g. a mount point
+
+    monkeypatch.setattr(Path, "rename", busy)
+    result = CliRunner().invoke(cli.main, ["config", "show"])
+    assert result.exit_code == 0, result.output
+    assert "warning: could not move" in result.output and "busy" in result.output
+    assert old.exists() and not config.CONFIG_DIR.exists()
+
+
+def test_unsearchable_home_does_not_break_every_command(fake_home, monkeypatch):
+    def denied(self):
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(Path, "is_dir", denied)
+    assert CliRunner().invoke(cli.main, ["config", "show"]).exit_code == 0

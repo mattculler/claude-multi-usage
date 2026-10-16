@@ -9,7 +9,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "deploy" / "systemd" / "install.sh"
-UNIT = REPO / "deploy" / "systemd" / "cmu-server.service"
+UNIT = REPO / "deploy" / "systemd" / "sandburn-server.service"
 
 
 def test_install_sh_is_valid_bash():
@@ -23,8 +23,22 @@ def test_install_sh_installs_from_the_lock_and_always_rebuilds_the_project():
     s = SCRIPT.read_text()
     assert "--locked" in s and "--no-dev" in s and "--no-editable" in s and "--extra server" in s
     # uv would otherwise keep the previous build of the project until pyproject.toml changes
-    assert "--reinstall-package claude-multi-usage" in s
+    assert "--reinstall-package sandburn" in s
     assert "umask 022" in s
     assert "UV_LINK_MODE=copy" in s and "UV_PYTHON_INSTALL_DIR=" in s
     assert "pip install" not in s and "-m venv" not in s
-    assert "ExecStart=/opt/cmu/venv/bin/cmu" in UNIT.read_text()
+    assert "ExecStart=/opt/sandburn/venv/bin/sburn" in UNIT.read_text()
+
+
+def test_install_sh_takes_over_a_pre_rename_server():
+    s = SCRIPT.read_text()
+    takeover = s.index("LEGACY_UNIT=cmu-server.service")
+    # only once the new venv is built and proven to run, and before the new service starts
+    assert s.index('runuser -u "$APP_USER"') < takeover < s.index('systemctl restart "$UNIT_NAME"')
+    assert 'systemctl disable --now "$LEGACY_UNIT"' in s
+    assert "LEGACY_DATA_DIR=/var/lib/cmu" in s and "LEGACY_INSTALL_DIR=/opt/cmu" in s
+    # the database (with a hot rollback journal, if any) moves only into an empty new location
+    assert 'if [[ -f "$LEGACY_DATA_DIR/server.db" && ! -e "$DATA_DIR/server.db" ]]; then' in s
+    assert "server.db{,-journal,-wal,-shm}" in s
+    assert s.index("server.db{,-journal") < s.index('rm -rf "$LEGACY_INSTALL_DIR"')
+    assert "SANDBURN_*" in s  # the settings file is not converted; the user is told

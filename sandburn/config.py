@@ -1,11 +1,14 @@
-"""Configuration management for claude-multi-usage."""
+"""Configuration management for sandburn."""
 
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".claude-multi-usage"
+CONFIG_DIR = Path.home() / ".sandburn"
+# Where everything lived before the tool was renamed from claude-multi-usage.
+LEGACY_CONFIG_DIR = Path.home() / ".claude-multi-usage"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
@@ -17,6 +20,34 @@ DEFAULT_CONFIG = {
 
 def _ensure_config_dir():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def migrate_legacy_dir() -> Path | None:
+    """Rename ~/.claude-multi-usage to ~/.sandburn, once, after the tool's rename.
+
+    The directory holds the settings, the session index, the pricing cache
+    and the autosync state, so one rename carries everything over. Nothing
+    happens once ~/.sandburn exists. Returns the old path when it was moved.
+    """
+    old, new = LEGACY_CONFIG_DIR, CONFIG_DIR
+    try:
+        # A rename in place only, never a move across the tree.
+        if old.parent != new.parent or not old.is_dir() or new.exists():
+            return None
+    except OSError:  # the home directory cannot be searched: nothing to do
+        return None
+    try:
+        old.rename(new)
+    except FileNotFoundError:  # another sburn process got there first
+        return None
+    except OSError as e:
+        print(
+            f"warning: could not move {old} to {new} ({e.strerror}); "
+            f"sburn reads {new}, move it yourself",
+            file=sys.stderr,
+        )
+        return None
+    return old
 
 
 def load_config() -> dict:

@@ -8,7 +8,7 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project --extra server
 COPY README.md LICENSE ./
-COPY claude_multi_usage ./claude_multi_usage
+COPY sandburn ./sandburn
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable --extra server
 
@@ -16,4 +16,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 VOLUME /data
 EXPOSE 8000
 
-CMD ["cmu", "server", "start", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sburn", "server", "start", "--host", "0.0.0.0", "--port", "8000"]

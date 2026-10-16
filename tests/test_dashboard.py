@@ -3,14 +3,14 @@ import io
 import pytest
 from rich.console import Console
 
-from claude_multi_usage import parser
-from claude_multi_usage.dashboard import (
+from sandburn import parser
+from sandburn.dashboard import (
     format_tokens,
     make_models_table,
     make_summary_panel,
     make_today_hourly_chart,
 )
-from claude_multi_usage.parser import HourlyUsage, ModelUsage, UsageData
+from sandburn.parser import HourlyUsage, ModelUsage, UsageData
 
 
 def render(renderable) -> str:

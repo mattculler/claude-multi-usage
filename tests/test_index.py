@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from claude_multi_usage import cost_cache, index, parser, pricing
+from sandburn import cost_cache, index, parser, pricing
 
 
 def _refresh():
@@ -282,7 +282,7 @@ def test_rebuild_rereads_present_files_and_keeps_gone_history(fake_home, monkeyp
 
 
 def test_concurrent_refreshes_do_not_double_count(fake_home, monkeypatch):
-    """Two cmu processes refreshing at once (the README's background `cmu sync`)
+    """Two sburn processes refreshing at once (the README's background `sburn sync`)
     serialize on the write transaction instead of both adding the same lines."""
     first = index.SessionIndex(index.INDEX_FILE)
     first.refresh()
@@ -589,7 +589,7 @@ def test_unwritable_index_location_falls_back_to_memory(fake_home, monkeypatch, 
 def test_cost_rebuild_flag(fake_home):
     from click.testing import CliRunner
 
-    from claude_multi_usage import cli
+    from sandburn import cli
 
     _refresh()
     result = CliRunner().invoke(cli.main, ["cost", "--rebuild"])

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install or upgrade the claude-multi-usage sync server as a systemd service.
+# Install or upgrade the sandburn sync server as a systemd service.
 #
 # Run from a checkout of this repository, on the Linux host that will run the
 # server:
@@ -9,13 +9,13 @@
 #
 # What it does:
 #   - installs uv into /usr/local/bin if no uv is found (https://astral.sh/uv)
-#   - creates a system user "cmu" with no login shell
-#   - creates a virtualenv in /opt/cmu/venv from uv.lock with the [server]
+#   - creates a system user "sandburn" with no login shell
+#   - creates a virtualenv in /opt/sandburn/venv from uv.lock with the [server]
 #     extra, on the host's Python 3.13 or one uv downloads into
-#     /opt/cmu/python (needs network access to PyPI)
-#   - creates /var/lib/cmu for the SQLite database
-#   - writes /etc/default/cmu-server (settings; created once, never overwritten)
-#   - installs cmu-server.service, enables it and (re)starts it
+#     /opt/sandburn/python (needs network access to PyPI)
+#   - creates /var/lib/sandburn for the SQLite database
+#   - writes /etc/default/sandburn-server (settings; created once, never overwritten)
+#   - installs sandburn-server.service, enables it and (re)starts it
 #   - waits for /api/health to answer
 #
 # To upgrade: git pull, then re-run this script. The database is kept.
@@ -32,12 +32,12 @@ umask 022
 # service user, as the venv's interpreter.
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-APP_USER=cmu
-INSTALL_DIR=/opt/cmu
+APP_USER=sandburn
+INSTALL_DIR=/opt/sandburn
 VENV="$INSTALL_DIR/venv"
-DATA_DIR=/var/lib/cmu
-DEFAULTS_FILE=/etc/default/cmu-server
-UNIT_NAME=cmu-server.service
+DATA_DIR=/var/lib/sandburn
+DEFAULTS_FILE=/etc/default/sandburn-server
+UNIT_NAME=sandburn-server.service
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT_SRC="$SCRIPT_DIR/$UNIT_NAME"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -103,7 +103,7 @@ install -d -m 755 "$INSTALL_DIR"
 install -d -m 750 -o "$APP_USER" -g "$APP_USER" "$DATA_DIR"
 
 echo "==> Virtualenv in $VENV (from uv.lock, Python $PYTHON)"
-# The venv is built by root but used by the "cmu" user, so it must not share
+# The venv is built by root but used by the "sandburn" user, so it must not share
 # files with root's cache (copy, not hardlink) and a downloaded Python must
 # live somewhere world-readable rather than under /root. The project itself
 # is always rebuilt: uv would otherwise keep the previous build until
@@ -122,8 +122,8 @@ if [[ -e "$VENV/bin/python" ]]; then
     esac
 fi
 "$UV" sync --project "$REPO_ROOT" --locked --no-dev --no-editable --extra server --quiet \
-    --reinstall-package claude-multi-usage --python "$PYTHON"
-[[ -x "$VENV/bin/cmu" ]] || die "installation failed: $VENV/bin/cmu not found"
+    --reinstall-package sandburn --python "$PYTHON"
+[[ -x "$VENV/bin/sburn" ]] || die "installation failed: $VENV/bin/sburn not found"
 # Copied files keep the modes they had in root's cache; make sure the service
 # user can read and run everything, then prove it.
 chmod -R u=rwX,go=rX "$VENV"
@@ -131,25 +131,51 @@ chmod -R u=rwX,go=rX "$VENV"
 case "$(readlink -f "$VENV/bin/python")" in
     /root/*|/home/*) die "the venv uses $(readlink -f "$VENV/bin/python"), which the '$APP_USER' user cannot read; pass PYTHON=<version> or an interpreter path outside /root and /home" ;;
 esac
-runuser -u "$APP_USER" -- env HOME="$DATA_DIR" "$VENV/bin/cmu" --version >/dev/null \
-    || die "the '$APP_USER' user cannot run $VENV/bin/cmu (interpreter: $(readlink -f "$VENV/bin/python")); check the permissions under $INSTALL_DIR"
+runuser -u "$APP_USER" -- env HOME="$DATA_DIR" "$VENV/bin/sburn" --version >/dev/null \
+    || die "the '$APP_USER' user cannot run $VENV/bin/sburn (interpreter: $(readlink -f "$VENV/bin/python")); check the permissions under $INSTALL_DIR"
+
+# The new venv is proven to work, so a server from before the tool was renamed
+# (cmu-server.service, /opt/cmu, /var/lib/cmu, the "cmu" user) can be retired
+# now, and its database taken over before the new service starts.
+LEGACY_UNIT=cmu-server.service
+LEGACY_INSTALL_DIR=/opt/cmu
+LEGACY_DATA_DIR=/var/lib/cmu
+LEGACY_DEFAULTS_FILE=/etc/default/cmu-server
+if [[ -f "/etc/systemd/system/$LEGACY_UNIT" ]]; then
+    echo "==> Retiring $LEGACY_UNIT"
+    systemctl disable --now "$LEGACY_UNIT" 2>/dev/null || true
+    rm -f "/etc/systemd/system/$LEGACY_UNIT"
+    systemctl daemon-reload
+fi
+if [[ -f "$LEGACY_DATA_DIR/server.db" && ! -e "$DATA_DIR/server.db" ]]; then
+    echo "==> Moving the database from $LEGACY_DATA_DIR to $DATA_DIR"
+    for f in "$LEGACY_DATA_DIR"/server.db{,-journal,-wal,-shm}; do
+        if [[ -e "$f" ]]; then mv "$f" "$DATA_DIR/"; fi
+    done
+    chown "$APP_USER:$APP_USER" "$DATA_DIR"/server.db*
+fi
+rm -rf "$LEGACY_INSTALL_DIR"
+if [[ -f "$LEGACY_DEFAULTS_FILE" ]] && grep -qE '^[[:space:]]*CMU_' "$LEGACY_DEFAULTS_FILE"; then
+    echo "note: these settings in $LEGACY_DEFAULTS_FILE are not carried over; set them as SANDBURN_* in $DEFAULTS_FILE:"
+    grep -E '^[[:space:]]*CMU_' "$LEGACY_DEFAULTS_FILE" | sed 's/^/      /'
+fi
 
 echo "==> Settings in $DEFAULTS_FILE"
 if [[ ! -f "$DEFAULTS_FILE" ]]; then
     cat > "$DEFAULTS_FILE" <<'EOT'
-# Settings for cmu-server.service. Uncomment to change a value, then:
-#   sudo systemctl restart cmu-server
+# Settings for sandburn-server.service. Uncomment to change a value, then:
+#   sudo systemctl restart sandburn-server
 #
 # The API has no authentication. Bind to a LAN or VPN address and never
 # expose it to the Internet.
-#CMU_HOST=0.0.0.0
-#CMU_PORT=8000
-# The database directory must exist and be writable by the "cmu" user
-# (install.sh creates /var/lib/cmu; for another location, create it and
-# `chown cmu:cmu` it first).
-#CMU_DB_PATH=/var/lib/cmu/server.db
+#SANDBURN_HOST=0.0.0.0
+#SANDBURN_PORT=8000
+# The database directory must exist and be writable by the "sandburn" user
+# (install.sh creates /var/lib/sandburn; for another location, create it and
+# `chown sandburn:sandburn` it first).
+#SANDBURN_DB_PATH=/var/lib/sandburn/server.db
 # Largest accepted sync payload in bytes.
-#CMU_MAX_BODY_BYTES=2097152
+#SANDBURN_MAX_BODY_BYTES=2097152
 EOT
     chmod 644 "$DEFAULTS_FILE"
 fi
@@ -161,7 +187,7 @@ systemctl enable "$UNIT_NAME" >/dev/null
 systemctl restart "$UNIT_NAME"
 
 # Probe the address the service actually binds to.
-read -r HOST PORT < <( (set +u; [[ -f "$DEFAULTS_FILE" ]] && . "$DEFAULTS_FILE"; echo "${CMU_HOST:-0.0.0.0} ${CMU_PORT:-8000}") )
+read -r HOST PORT < <( (set +u; [[ -f "$DEFAULTS_FILE" ]] && . "$DEFAULTS_FILE"; echo "${SANDBURN_HOST:-0.0.0.0} ${SANDBURN_PORT:-8000}") )
 case "$HOST" in
     ""|0.0.0.0) PROBE_HOST=127.0.0.1 ;;
     ::|"[::]")  PROBE_HOST="[::1]" ;;
@@ -174,7 +200,10 @@ for _ in $(seq 1 20); do
         echo "==> Running: $HEALTH_URL is up"
         echo "    status:  systemctl status $UNIT_NAME"
         echo "    logs:    journalctl -u $UNIT_NAME -f"
-        echo "    clients: cmu config server http://<this-host>:$PORT"
+        echo "    clients: sburn config server http://<this-host>:$PORT"
+        if id -u cmu >/dev/null 2>&1 || [[ -e "$LEGACY_DATA_DIR" || -e "$LEGACY_DEFAULTS_FILE" ]]; then
+            echo "    pre-rename leftovers, once you are happy: sudo userdel cmu; sudo rm -rf $LEGACY_DATA_DIR $LEGACY_DEFAULTS_FILE"
+        fi
         exit 0
     fi
     sleep 0.5

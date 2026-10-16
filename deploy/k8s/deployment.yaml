@@ -1,21 +1,21 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: cmu-server
+  name: sandburn-server
   labels:
-    app: cmu-server
+    app: sandburn-server
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: cmu-server
+      app: sandburn-server
   template:
     metadata:
       labels:
-        app: cmu-server
+        app: sandburn-server
     spec:
       containers:
-        - name: cmu-server
+        - name: sandburn-server
           image: ghcr.io/hunknownn/claude-multi-usage
           ports:
             - containerPort: 8000
@@ -37,4 +37,4 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: cmu-server-data
+            claimName: sandburn-server-data

@@ -7,8 +7,8 @@ import zipfile
 import pytest
 from click.testing import CliRunner
 
-from claude_multi_usage import claude_export, cli, config
-from claude_multi_usage.claude_export import (
+from sandburn import claude_export, cli, config
+from sandburn.claude_export import (
     DEFAULT_ALIAS,
     ESTIMATED_MODEL,
     EXPORT_HOSTNAME_PREFIX,
@@ -409,10 +409,10 @@ def test_reimport_replaces_the_device_on_the_server(export_zip, tmp_path, monkey
         pytest.skip("Starlette's test client needs httpx2 or httpx")
     from fastapi.testclient import TestClient
 
-    from claude_multi_usage.server import app as app_module
+    from sandburn.server import app as app_module
 
-    monkeypatch.setenv("CMU_DB_PATH", str(tmp_path / "server.db"))
-    monkeypatch.delenv("CMU_MAX_BODY_BYTES", raising=False)
+    monkeypatch.setenv("SANDBURN_DB_PATH", str(tmp_path / "server.db"))
+    monkeypatch.delenv("SANDBURN_MAX_BODY_BYTES", raising=False)
     monkeypatch.setattr(app_module, "_store", None)
     data = load_export(export_zip)
     payload = summarize_export(data, ["k1"], alias="personal")
@@ -443,8 +443,8 @@ def test_estimated_usage_is_marked_in_dashboards(fake_home):
 
     from rich.console import Console
 
-    from claude_multi_usage.dashboard import make_summary_panel
-    from claude_multi_usage.parser import ModelUsage, UsageData
+    from sandburn.dashboard import make_summary_panel
+    from sandburn.parser import ModelUsage, UsageData
 
     data = UsageData(
         hostname="merged",

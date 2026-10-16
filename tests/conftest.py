@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_multi_usage import cli, config, cost_cache, dashboard, index, parser, pricing, tree
+from sandburn import autosync, cli, config, cost_cache, dashboard, index, parser, pricing, tree
 
 MODEL = "claude-sonnet-4-5-20250929"
 PRICING = {
@@ -69,21 +69,25 @@ def fake_home(tmp_path, monkeypatch):
     """Build a fake ~/.claude and point every module at it."""
     claude_dir = tmp_path / ".claude"
     projects = claude_dir / "projects"
-    cmu_dir = tmp_path / ".claude-multi-usage"
+    config_dir = tmp_path / ".sandburn"
 
     monkeypatch.setattr(parser, "CLAUDE_DIR", claude_dir)
     monkeypatch.setattr(parser, "STATS_FILE", claude_dir / "stats-cache.json")
     monkeypatch.setattr(parser, "PROJECTS_DIR", projects)
     monkeypatch.setattr(parser, "get_hostname", lambda: "test-host")
-    monkeypatch.setattr(index, "CACHE_DIR", cmu_dir)
-    monkeypatch.setattr(index, "INDEX_FILE", cmu_dir / "index.db")
+    monkeypatch.setattr(index, "CACHE_DIR", config_dir)
+    monkeypatch.setattr(index, "INDEX_FILE", config_dir / "index.db")
     monkeypatch.setattr(index, "_instance", None)
-    monkeypatch.setattr(pricing, "CACHE_DIR", cmu_dir)
-    monkeypatch.setattr(pricing, "PRICING_CACHE_FILE", cmu_dir / "pricing-cache.json")
+    monkeypatch.setattr(pricing, "CACHE_DIR", config_dir)
+    monkeypatch.setattr(pricing, "PRICING_CACHE_FILE", config_dir / "pricing-cache.json")
     monkeypatch.setattr(pricing, "_pricing_cache", {k: dict(v) for k, v in PRICING.items()})
     monkeypatch.setattr(pricing, "_fetch_litellm_pricing", lambda: None)
-    monkeypatch.setattr(config, "CONFIG_DIR", cmu_dir)
-    monkeypatch.setattr(config, "CONFIG_FILE", cmu_dir / "config.json")
+    monkeypatch.setattr(config, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(config, "LEGACY_CONFIG_DIR", tmp_path / ".claude-multi-usage")
+    monkeypatch.setattr(autosync, "CACHE_DIR", config_dir)
+    monkeypatch.setattr(autosync, "STATE_FILE", config_dir / "autosync-state.json")
+    monkeypatch.setattr(autosync, "LOCK_FILE", config_dir / "autosync.lock")
+    monkeypatch.setattr(config, "CONFIG_FILE", config_dir / "config.json")
     # Rich reads COLUMNS when stdout is not a terminal; keep table cells unwrapped.
     monkeypatch.setenv("COLUMNS", "140")
 

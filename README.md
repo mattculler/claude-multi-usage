@@ -1,4 +1,4 @@
-# claude-multi-usage (cmu)
+# sandburn (sburn)
 
 CLI dashboard for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) usage tracking across multiple devices.
 
@@ -9,37 +9,48 @@ Parses local `~/.claude` data and displays usage stats in your terminal — sess
 This fork is installed from the repository with [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`); no system Python, pip or venv package is needed, uv downloads a Python if there is none. The upstream package on PyPI and Homebrew (`pipx install claude-multi-usage`, `brew install hunknownn/tap/claude-multi-usage`) is upstream's release line and does not contain this fork's fixes (token deduplication, repository-name projects, the server's size limit).
 
 ```bash
-uv tool install "git+https://github.com/mattculler/claude-multi-usage.git"
-uv tool upgrade claude-multi-usage          # later, to pick up new commits
+uv tool install "git+https://github.com/mattculler/sandburn.git"
+uv tool upgrade sandburn          # later, to pick up new commits
 ```
 
-From a checkout, `uv tool install -e .` installs it editable: `git pull` is then enough to update, and `cmu remote install` sends the checkout itself to other machines.
+From a checkout, `uv tool install -e .` installs it editable: `git pull` is then enough to update, and `sburn remote install` sends the checkout itself to other machines.
+
+Development happens on Forgejo; GitHub (`mattculler/sandburn`) is a mirror of it, and the address the install commands use.
+
+### Upgrading from claude-multi-usage
+
+This tool used to be `claude-multi-usage`, with the command `cmu`. Installing sandburn replaces it:
+
+- **Workstation:** `uv tool install "git+https://github.com/mattculler/sandburn.git"`, then `uv tool uninstall claude-multi-usage`. The first `sburn` run moves `~/.claude-multi-usage` (settings, session index, autosync state) to `~/.sandburn`, and `sburn autosync install` replaces the old `cmu-autosync` timer or `com.claude-multi-usage.autosync` agent, which would otherwise keep calling the removed command.
+- **Other machines:** `sburn remote install HOST` does all of the above on the remote.
+- **Server VM:** `git pull` and `sudo deploy/systemd/install.sh`. It retires `cmu-server.service`, removes `/opt/cmu` and moves the database from `/var/lib/cmu` to `/var/lib/sandburn`. Settings in `/etc/default/cmu-server` are not carried over: the variables are now `SANDBURN_HOST`, `SANDBURN_PORT`, `SANDBURN_DB_PATH` and `SANDBURN_MAX_BODY_BYTES`, in `/etc/default/sandburn-server`. The `cmu` user and the empty `/var/lib/cmu` are left for you to delete.
+- **Docker and Kubernetes:** the image still keeps its data in `/data`, but the example names changed. Stop and remove the old `cmu-server` container and keep mounting your existing volume (`-v cmu-data:/data`), or copy it to `sandburn-data`. On Kubernetes the claim is now `sandburn-server-data`: keep `claimName: cmu-server-data` in `deployment.yaml` or move the data over. `CMU_*` environment variables became `SANDBURN_*`.
 
 ## Usage
 
 ```bash
-cmu                    # Full dashboard (last 14 days)
-cmu today              # Today's realtime usage
-cmu hourly             # Today's hourly breakdown (tokens/msgs per hour)
-cmu projects           # Usage by project (sorted by output tokens)
-cmu projects -n 5      # Top 5 projects only
-cmu models             # Usage by model
-cmu cost               # Monthly cost breakdown
-cmu cost --rebuild     # Re-read the session files on disk (after a time zone change)
-cmu tree               # Grass/tree ASCII art visualization (daily/weekly/monthly/yearly)
-cmu dashboard -d 30    # Last 30 days
-cmu dashboard --from 2026-03-01 --to 2026-03-07   # Date range
-cmu diff               # All devices (per-device view, via sync server)
-cmu diff --merged      # All devices (merged into one view)
-cmu diff --key my-key  # Filter by specific key
-cmu config show        # Show current configuration
-cmu sync               # Push local usage to the sync server once
-cmu autosync install   # Sync automatically whenever local usage changes
-cmu remote install HOST                # Install cmu + autosync on another machine over ssh
-cmu import-claude-export export.zip    # Import a claude.ai data export (web/desktop/mobile chats)
+sburn                    # Full dashboard (last 14 days)
+sburn today              # Today's realtime usage
+sburn hourly             # Today's hourly breakdown (tokens/msgs per hour)
+sburn projects           # Usage by project (sorted by output tokens)
+sburn projects -n 5      # Top 5 projects only
+sburn models             # Usage by model
+sburn cost               # Monthly cost breakdown
+sburn cost --rebuild     # Re-read the session files on disk (after a time zone change)
+sburn tree               # Grass/tree ASCII art visualization (daily/weekly/monthly/yearly)
+sburn dashboard -d 30    # Last 30 days
+sburn dashboard --from 2026-03-01 --to 2026-03-07   # Date range
+sburn diff               # All devices (per-device view, via sync server)
+sburn diff --merged      # All devices (merged into one view)
+sburn diff --key my-key  # Filter by specific key
+sburn config show        # Show current configuration
+sburn sync               # Push local usage to the sync server once
+sburn autosync install   # Sync automatically whenever local usage changes
+sburn remote install HOST                # Install sburn + autosync on another machine over ssh
+sburn import-claude-export export.zip    # Import a claude.ai data export (web/desktop/mobile chats)
 ```
 
-`claude-multi-usage` also works as a command alias.
+`sandburn` also works as a command alias.
 
 ## Multi-Device Sync
 
@@ -49,7 +60,7 @@ Collect usage data from multiple machines into a central server.
 
 ### What gets synced
 
-`cmu sync` sends: hostname, alias, your keys, the sync time, cumulative session and message totals and the first-session date, per-day message/session/tool-call counts, per-day and cumulative token counts by model, an hourly session histogram, today's per-hour tokens/messages/sessions, and a project list. Projects are identified by repository name (the last component of the working directory Claude Code ran in; a Claude Code worktree counts as its repository), with session counts, token totals and first/last-seen dates. It never sends prompts, responses, file contents, full paths, or API keys.
+`sburn sync` sends: hostname, alias, your keys, the sync time, cumulative session and message totals and the first-session date, per-day message/session/tool-call counts, per-day and cumulative token counts by model, an hourly session histogram, today's per-hour tokens/messages/sessions, and a project list. Projects are identified by repository name (the last component of the working directory Claude Code ran in; a Claude Code worktree counts as its repository), with session counts, token totals and first/last-seen dates. It never sends prompts, responses, file contents, full paths, or API keys.
 
 For very old session logs that recorded no working directory, the name is guessed from Claude Code's directory name instead and may be truncated (for example `my-repo` becomes `repo`). Servers that received syncs from clients older than this fork keep the full-path names those clients sent until the server is restarted or the device syncs again; both drop them.
 
@@ -60,16 +71,16 @@ For very old session logs that recorded no working directory, the name is guesse
 On a Linux host with systemd and `curl`, from a checkout of this repository:
 
 ```bash
-git clone https://github.com/mattculler/claude-multi-usage.git
-cd claude-multi-usage
+git clone https://github.com/mattculler/sandburn.git
+cd sandburn
 sudo deploy/systemd/install.sh
 ```
 
-The script installs uv into `/usr/local/bin` if the host has none, creates a `cmu` system user, builds `/opt/cmu/venv` from `uv.lock` on the host's Python 3.13 (or one uv downloads into `/opt/cmu/python`; `sudo PYTHON=3.12 deploy/systemd/install.sh` picks another, since sudo resets the environment the variable goes after `sudo`), keeps the database in `/var/lib/cmu/server.db`, and enables `cmu-server.service` on port 8000, then waits for `/api/health` to answer. Settings (bind address, port, database path, request size limit) live in `/etc/default/cmu-server`; restart the service after editing. A different database directory must exist and be writable by the `cmu` user. To upgrade, `git pull` and re-run the script. To remove it, `sudo deploy/systemd/install.sh --uninstall`.
+The script installs uv into `/usr/local/bin` if the host has none, creates a `sandburn` system user, builds `/opt/sandburn/venv` from `uv.lock` on the host's Python 3.13 (or one uv downloads into `/opt/sandburn/python`; `sudo PYTHON=3.12 deploy/systemd/install.sh` picks another, since sudo resets the environment the variable goes after `sudo`), keeps the database in `/var/lib/sandburn/server.db`, and enables `sandburn-server.service` on port 8000, then waits for `/api/health` to answer. Settings (bind address, port, database path, request size limit) live in `/etc/default/sandburn-server`; restart the service after editing. A different database directory must exist and be writable by the `sandburn` user. To upgrade, `git pull` and re-run the script. To remove it, `sudo deploy/systemd/install.sh --uninstall`.
 
 ```bash
-systemctl status cmu-server
-journalctl -u cmu-server -f
+systemctl status sandburn-server
+journalctl -u sandburn-server -f
 curl http://localhost:8000/api/health
 ```
 
@@ -81,8 +92,8 @@ curl http://localhost:8000/api/health
 Build the image from this checkout; the published `ghcr.io/hunknownn/claude-multi-usage` image is upstream's build and lacks this fork's changes.
 
 ```bash
-docker build -t cmu-server .
-docker run -d --name cmu-server -p 127.0.0.1:8000:8000 -v cmu-data:/data cmu-server
+docker build -t sandburn-server .
+docker run -d --name sandburn-server -p 127.0.0.1:8000:8000 -v sandburn-data:/data sandburn-server
 ```
 
 Replace `127.0.0.1` with the LAN address clients should use. Do not publish the port on a public interface.
@@ -94,8 +105,8 @@ Replace `127.0.0.1` with the LAN address clients should use. Do not publish the 
 `deploy/k8s/` has a Kustomize base (Deployment, ClusterIP Service, 1 GiB PVC). Its `kustomization.yaml` pins upstream's `ghcr.io/hunknownn/claude-multi-usage` image; to run this fork's code, build and push your own image and point the `images:` entry at it, then:
 
 ```bash
-kubectl create namespace cmu-server
-kubectl apply -k deploy/k8s/ -n cmu-server
+kubectl create namespace sandburn-server
+kubectl apply -k deploy/k8s/ -n sandburn-server
 ```
 
 The Service is `ClusterIP`, reachable inside the cluster only. `deploy/k8s/ingress.example.yaml` shows how to expose it through an Ingress; only do that behind an authenticating ingress or on a private network.
@@ -107,82 +118,82 @@ The Service is `ClusterIP`, reachable inside the cluster only. `deploy/k8s/ingre
 From a checkout of this repository:
 
 ```bash
-uv run --extra server cmu server start --db-path ./server.db
-uv run --extra server cmu server start --host 0.0.0.0 --port 8000 --db-path ./server.db
+uv run --extra server sburn server start --db-path ./server.db
+uv run --extra server sburn server start --host 0.0.0.0 --port 8000 --db-path ./server.db
 ```
 
-Options: `--host`, `--port`, `--db-path PATH` (default `/data/server.db`, the Docker image's volume), `--max-body-bytes N` (reject sync payloads larger than N bytes; default 2 MB). The same settings can be given as `CMU_DB_PATH` and `CMU_MAX_BODY_BYTES` environment variables.
+Options: `--host`, `--port`, `--db-path PATH` (default `/data/server.db`, the Docker image's volume), `--max-body-bytes N` (reject sync payloads larger than N bytes; default 2 MB). The same settings can be given as `SANDBURN_DB_PATH` and `SANDBURN_MAX_BODY_BYTES` environment variables.
 </details>
 
 ### Client Setup
 
 ```bash
 # Set server URL and key (once per device)
-cmu config server https://your-server.com
-cmu config key add my-key "personal usage"
+sburn config server https://your-server.com
+sburn config key add my-key "personal usage"
 
 # Set device alias (optional, for readable display names)
-cmu config alias macbook-air
+sburn config alias macbook-air
 
 # Sync usage data
-cmu sync
+sburn sync
 
 # View all devices' usage
-cmu diff               # Per-device view
-cmu diff --merged      # Merged into one view
-cmu diff --key my-key  # Filter by specific key
+sburn diff               # Per-device view
+sburn diff --merged      # Merged into one view
+sburn diff --key my-key  # Filter by specific key
 ```
 
-> Keys group devices for the `cmu diff` view. They are not access control: the server returns every device's data to anyone who asks (see the warning above). Local commands (`cmu dashboard`, `cmu today`, `cmu cost`, etc.) work without keys or a server.
+> Keys group devices for the `sburn diff` view. They are not access control: the server returns every device's data to anyone who asks (see the warning above). Local commands (`sburn dashboard`, `sburn today`, `sburn cost`, etc.) work without keys or a server.
 
 ### Auto Sync
 
 Install a per-user scheduled job that checks every few minutes whether the local usage files changed and uploads only then:
 
 ```bash
-cmu autosync install            # every 15 minutes
-cmu autosync install --every 5
-cmu autosync status
-cmu autosync uninstall
+sburn autosync install            # every 15 minutes
+sburn autosync install --every 5
+sburn autosync status
+sburn autosync uninstall
 ```
 
-On Linux this is a systemd user timer (`~/.config/systemd/user/cmu-autosync.timer`); it runs while you are logged in, or always with `cmu autosync install --linger` (`loginctl enable-linger`). On macOS it is a launchd agent in `~/Library/LaunchAgents`, logging to `~/.claude-multi-usage/autosync.log`. The job runs `cmu autosync run`, which compares a fingerprint of `~/.claude` and the sync settings with the one from the last successful sync; an idle machine never contacts the server. `cmu sync --if-changed` does the same check for a shell wrapper such as:
+On Linux this is a systemd user timer (`~/.config/systemd/user/sandburn-autosync.timer`); it runs while you are logged in, or always with `sburn autosync install --linger` (`loginctl enable-linger`). On macOS it is a launchd agent in `~/Library/LaunchAgents`, logging to `~/.sandburn/autosync.log`. The job runs `sburn autosync run`, which compares a fingerprint of `~/.claude` and the sync settings with the one from the last successful sync; an idle machine never contacts the server. `sburn sync --if-changed` does the same check for a shell wrapper such as:
 
 ```bash
 cc() {
-    cmu sync --if-changed --quiet &>/dev/null &
+    sburn sync --if-changed --quiet &>/dev/null &
     command claude "$@"
-    cmu sync --if-changed --quiet &>/dev/null &
+    sburn sync --if-changed --quiet &>/dev/null &
 }
 ```
 
 ### Other machines
 
-From a machine that is already configured, install cmu, the server settings and the autosync job on another one over ssh:
+From a machine that is already configured, install sburn, the server settings and the autosync job on another one over ssh:
 
 ```bash
-cmu remote install alice@laptop
-cmu remote install laptop --alias laptop --every 5
-cmu remote install laptop --from git+https://github.com/mattculler/claude-multi-usage.git
-cmu remote uninstall laptop
+sburn remote install alice@laptop
+sburn remote install laptop --alias laptop --every 5
+sburn remote install laptop --from git+https://github.com/mattculler/sandburn.git
+sburn remote uninstall laptop
 ```
 
-The remote gets uv (installed into `~/.local/bin` by the official installer if the host has none; shell profiles are left alone, so that directory must be on the PATH there), cmu as a uv tool with a `~/.local/bin/cmu` command, this machine's server URL and keys (override with `--server` and `--key`), and `cmu autosync install` (add `--linger` for a Linux remote that should sync while nobody is logged in). When run from a source checkout, the checkout's git-tracked files are sent over and kept in `~/.local/share/cmu/src`; otherwise the repository URL is installed, which needs `git` and GitHub access on the remote. The remote needs `bash`, `curl` or `wget`, and access to PyPI for the dependencies; uv downloads a Python if the host has none that is 3.9 or newer (pick one with `--python 3.12`). Re-running the command upgrades an existing install, including one made by the earlier venv-based version of this command. On a Mac that nobody is logged in to, the launchd agent is installed but only starts at the next login. Make sure the server URL is one the remote can reach (not `localhost`).
+The remote gets uv (installed into `~/.local/bin` by the official installer if the host has none; shell profiles are left alone, so that directory must be on the PATH there), sburn as a uv tool with a `~/.local/bin/sburn` command, this machine's server URL and keys (override with `--server` and `--key`), and `sburn autosync install` (add `--linger` for a Linux remote that should sync while nobody is logged in). When run from a source checkout, the checkout's git-tracked files are sent over and kept in `~/.local/share/sandburn/src`; otherwise the repository URL is installed, which needs `git` and GitHub access on the remote. The remote needs `bash`, `curl` or `wget`, and access to PyPI for the dependencies; uv downloads a Python if the host has none that is 3.9 or newer (pick one with `--python 3.12`). Re-running the command upgrades an existing install; one from before the rename (`claude-multi-usage`, `cmu`) is removed, including its autosync job. On a Mac that nobody is logged in to, the launchd agent is installed but only starts at the next login. Make sure the server URL is one the remote can reach (not `localhost`).
 
 ### claude.ai chats (web, desktop, Android, iOS)
 
 Chats in the Claude apps are not on any machine you control, and Anthropic offers no usage API for subscribers. The compliant source is the account data export: on claude.ai (web or desktop app; not available in the mobile apps) go to Settings > Privacy > Export data, download the ZIP from the emailed link (valid 24 hours), then:
 
 ```bash
-cmu import-claude-export ~/Downloads/data-2026-10-06.zip
-cmu import-claude-export ~/Downloads/data-2026-10-06.zip --dry-run   # inspect without sending
+sburn import-claude-export ~/Downloads/data-2026-10-06.zip
+sburn import-claude-export ~/Downloads/data-2026-10-06.zip --dry-run   # inspect without sending
 ```
 
-The export is account-wide, so it covers conversations from every client including the phone apps. Each account is imported as its own device, `claude.ai-<id>` (alias `claude.ai`, change it with `--alias`), visible in `cmu diff`. Message and conversation counts and dates are exact; the export has no token counts or model names, so tokens are estimated from text length (about 4 characters per token, so non-English text is underestimated) under the model name `claude.ai (estimated)`, and the merged view marks totals that include them. An export is a complete snapshot of the account, so each import replaces the previous one on the server (older servers without snapshot support merge day by day instead): the most recent import wins. Days are bucketed in the local time zone of the machine that runs the import. The export cannot be automated or scheduled: request it by hand at whatever cadence you like.
+The export is account-wide, so it covers conversations from every client including the phone apps. Each account is imported as its own device, `claude.ai-<id>` (alias `claude.ai`, change it with `--alias`), visible in `sburn diff`. Message and conversation counts and dates are exact; the export has no token counts or model names, so tokens are estimated from text length (about 4 characters per token, so non-English text is underestimated) under the model name `claude.ai (estimated)`, and the merged view marks totals that include them. An export is a complete snapshot of the account, so each import replaces the previous one on the server (older servers without snapshot support merge day by day instead): the most recent import wins. Days are bucketed in the local time zone of the machine that runs the import. The export cannot be automated or scheduled: request it by hand at whatever cadence you like.
 
 ## Dashboard Preview
 
-### `cmu dashboard` (local)
+### `sburn dashboard` (local)
 
 ```
 ── Claude Usage Dashboard  ──  my-macbook.local  ──  2026-03-07 ──
@@ -223,7 +234,7 @@ The export is account-wide, so it covers conversations from every client includi
 ╰────────────────────────────────────────────────────────────────────╯
 ```
 
-### `cmu diff` (multi-device, per-device view)
+### `sburn diff` (multi-device, per-device view)
 
 ```
 ── Claude Diff Dashboard  ──  2 devices  ──  2026-03-07 ──
@@ -257,7 +268,7 @@ The export is account-wide, so it covers conversations from every client includi
 ╭──── Top Projects ───╮
 ```
 
-> Devices with an alias show as `alias (hostname)`. Devices without an alias show hostname only. Today's hourly usage is shown per device when available via `cmu sync`.
+> Devices with an alias show as `alias (hostname)`. Devices without an alias show hostname only. Today's hourly usage is shown per device when available via `sburn sync`.
 
 ## Cost Estimation
 
@@ -289,9 +300,9 @@ Reads local Claude Code data from `~/.claude/`:
 - `stats-cache.json` — daily activity, model tokens, hourly counts
 - `projects/**/*.jsonl` — session files per project (including subagents)
 
-Session files are read into an incremental index at `~/.claude-multi-usage/index.db`. A file is read again only when it changes, and only the newly appended bytes when it grew in place, so commands stay fast as history accumulates. Transcripts that Claude Code deletes after its retention period stay in the index as history, so `cmu cost` keeps showing past months. The index stores token counts, not prices. Local dates are fixed when a file is indexed, so after changing the system time zone run `cmu cost --rebuild` (it re-reads the files still on disk; already-deleted transcripts keep their old dates). If the index cannot be written (read-only home directory) the session files are read directly for that run.
+Session files are read into an incremental index at `~/.sandburn/index.db`. A file is read again only when it changes, and only the newly appended bytes when it grew in place, so commands stay fast as history accumulates. Transcripts that Claude Code deletes after its retention period stay in the index as history, so `sburn cost` keeps showing past months. The index stores token counts, not prices. Local dates are fixed when a file is indexed, so after changing the system time zone run `sburn cost --rebuild` (it re-reads the files still on disk; already-deleted transcripts keep their old dates). If the index cannot be written (read-only home directory) the session files are read directly for that run.
 
-Upgrading from a version that kept `~/.claude-multi-usage/cost-cache.json`: that file is no longer read and can be deleted. Days whose transcripts Claude Code had already deleted before the first run of this version are not carried over.
+Upgrading from a version that kept `~/.sandburn/cost-cache.json`: that file is no longer read and can be deleted. Days whose transcripts Claude Code had already deleted before the first run of this version are not carried over.
 
 No API keys required. Local data stays local unless you opt in to sync; the only other network access is a fetch of model prices from LiteLLM's GitHub repository, cached for 24 hours.
 
@@ -300,9 +311,9 @@ No API keys required. Local data stays local unless you opt in to sync; the only
 - [x] Multi-device sync via central server ([#2](https://github.com/hunknownn/claude-multi-usage/issues/2))
 - [x] Accurate cost estimation with incremental caching ([#5](https://github.com/hunknownn/claude-multi-usage/issues/5))
 - [x] Key-based device grouping with alias support ([#8](https://github.com/hunknownn/claude-multi-usage/issues/8), [#11](https://github.com/hunknownn/claude-multi-usage/issues/11))
-- [x] `cmu diff` — multi-device per-device/merged view ([#11](https://github.com/hunknownn/claude-multi-usage/issues/11))
-- [x] `cmu hourly` — today's per-hour usage breakdown with sync support
-- [x] `cmu tree` — grass/tree ASCII art visualization ([#17](https://github.com/hunknownn/claude-multi-usage/issues/17))
+- [x] `sburn diff` — multi-device per-device/merged view ([#11](https://github.com/hunknownn/claude-multi-usage/issues/11))
+- [x] `sburn hourly` — today's per-hour usage breakdown with sync support
+- [x] `sburn tree` — grass/tree ASCII art visualization ([#17](https://github.com/hunknownn/claude-multi-usage/issues/17))
 - [x] Homebrew support
 - [ ] Web dashboard ([#3](https://github.com/hunknownn/claude-multi-usage/issues/3))
 
@@ -315,7 +326,7 @@ uv run ruff format        # format
 uv run pytest
 ```
 
-CI has a lint job (`ruff check` and `ruff format --check`) and a test job (`pytest` on 3.9, 3.11 and 3.13), both installed from the lockfile with `--locked`, which fails when `uv.lock` is stale: run `uv lock` after changing dependencies and commit `uv.lock`.
+CI (`.github/workflows/ci.yml`, run by GitHub Actions on the mirror) has a lint job (`ruff check` and `ruff format --check`) and a test job (`pytest` on 3.9, 3.11 and 3.13), both installed from the lockfile with `--locked`, which fails when `uv.lock` is stale: run `uv lock` after changing dependencies and commit `uv.lock`.
 
 Tests run against a synthetic `~/.claude` tree in a temp directory and never touch the network.
 

@@ -1,4 +1,4 @@
-"""CLI entry point for claude-multi-usage."""
+"""CLI entry point for sandburn."""
 
 from __future__ import annotations
 
@@ -245,13 +245,13 @@ def _fetch_all_devices(key: str | None = None) -> list[dict]:
 
     if not server_url:
         console.print("[red]Server URL not configured.[/red]")
-        console.print("Run: cmu config server <url>")
+        console.print("Run: sburn config server <url>")
         raise SystemExit(1)
 
     keys = get_keys()
     if not keys:
         console.print("[red]No keys configured.[/red]")
-        console.print("Run: cmu config key add <your-key>")
+        console.print("Run: sburn config key add <your-key>")
         raise SystemExit(1)
 
     # Query only the given key, otherwise every registered key
@@ -263,7 +263,7 @@ def _fetch_all_devices(key: str | None = None) -> list[dict]:
             params = urllib.parse.urlencode({"key": qk})
             req = urllib.request.Request(
                 f"{server_url}/api/usage?{params}",
-                headers={"User-Agent": "cmu"},
+                headers={"User-Agent": "sburn"},
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 devices = json.loads(resp.read())
@@ -281,29 +281,29 @@ def _fetch_all_devices(key: str | None = None) -> list[dict]:
 
 
 @click.group(invoke_without_command=True, context_settings=CONTEXT_SETTINGS)
-@click.version_option(package_name="claude-multi-usage")
+@click.version_option(package_name="sandburn")
 @click.pass_context
 def main(ctx):
     """Claude Code usage dashboard across multiple devices.
 
     \b
     Quick start:
-      cmu                        Full dashboard (last 14 days)
-      cmu today                  Today's realtime usage
-      cmu hourly                 Today's hourly breakdown
-      cmu projects               Project breakdown with token usage
-      cmu projects -n 5          Top 5 projects only
-      cmu models                 Model usage breakdown
-      cmu cost                   Monthly cost breakdown
-      cmu dashboard -d 7         Last 7 days
-      cmu dashboard -d 30        Last 30 days
-      cmu dashboard --from 2026-03-01 --to 2026-03-07    Date range
-      cmu diff                   All devices (per-device view)
-      cmu diff --merged          All devices (merged view)
-      cmu sync                   Push local usage to the sync server
-      cmu autosync install       Keep the server updated automatically
-      cmu remote install HOST    Set up cmu + autosync on another machine
-      cmu import-claude-export   Import a claude.ai data export
+      sburn                        Full dashboard (last 14 days)
+      sburn today                  Today's realtime usage
+      sburn hourly                 Today's hourly breakdown
+      sburn projects               Project breakdown with token usage
+      sburn projects -n 5          Top 5 projects only
+      sburn models                 Model usage breakdown
+      sburn cost                   Monthly cost breakdown
+      sburn dashboard -d 7         Last 7 days
+      sburn dashboard -d 30        Last 30 days
+      sburn dashboard --from 2026-03-01 --to 2026-03-07    Date range
+      sburn diff                   All devices (per-device view)
+      sburn diff --merged          All devices (merged view)
+      sburn sync                   Push local usage to the sync server
+      sburn autosync install       Keep the server updated automatically
+      sburn remote install HOST    Set up sburn + autosync on another machine
+      sburn import-claude-export   Import a claude.ai data export
 
     \b
     Data source:
@@ -311,8 +311,23 @@ def main(ctx):
       No API keys required. Network is used only to fetch model pricing
       from LiteLLM's GitHub repo (cached 24h), for the opt-in sync
       commands (sync, autosync, import-claude-export) and for
-      `cmu remote` over your own ssh.
+      `sburn remote` over your own ssh.
     """
+    from . import config
+
+    moved = config.migrate_legacy_dir()
+    if moved:
+        from . import autosync
+
+        click.echo(
+            f"moved {moved} to {config.CONFIG_DIR} (claude-multi-usage is now sandburn)", err=True
+        )
+        if autosync.legacy_job_files():
+            click.echo(
+                "the pre-rename autosync job is still installed and now fails: "
+                "run `sburn autosync install` (or `sburn autosync uninstall`)",
+                err=True,
+            )
     if ctx.invoked_subcommand is None:
         ctx.invoke(dashboard)
 
@@ -347,9 +362,9 @@ def dashboard(days: int, date_from: str, date_to: str):
 
     \b
     Examples:
-      cmu dashboard                 Last 14 days (default)
-      cmu dashboard -d 7            Last 7 days
-      cmu dashboard -d 30           Last 30 days
+      sburn dashboard                 Last 14 days (default)
+      sburn dashboard -d 7            Last 7 days
+      sburn dashboard -d 30           Last 30 days
 
     \b
     Includes: summary, model usage, daily token chart,
@@ -364,7 +379,7 @@ def today():
     """Show today's usage in realtime.
 
     \b
-    Uses the session index (see `cmu cost --help`), which picks up
+    Uses the session index (see `sburn cost --help`), which picks up
     new session lines on every run, so it works even before
     stats-cache.json is updated by Claude Code.
 
@@ -423,7 +438,7 @@ def hourly():
 
     \b
     Shows per-hour token usage, message counts, and session counts
-    for today from the session index (see `cmu cost --help`).
+    for today from the session index (see `sburn cost --help`).
 
     \b
     Shows: 24-hour bar chart with tokens, messages, sessions per hour.
@@ -450,7 +465,7 @@ def projects(limit: int):
 
     \b
     Per-repository token usage from the session index (see
-    `cmu cost --help`). Shows sessions, output tokens, cost, and
+    `sburn cost --help`). Shows sessions, output tokens, cost, and
     last used date.
     """
     console = Console()
@@ -488,7 +503,7 @@ def cost(rebuild: bool):
 
     \b
     Token counts come from an incremental index of the session files
-    (~/.claude-multi-usage/index.db): only files that changed since the
+    (~/.sandburn/index.db): only files that changed since the
     last run are read, and transcripts Claude Code deletes stay in the
     index as history. Prices are applied when displaying, so a pricing
     update takes effect immediately.
@@ -585,10 +600,10 @@ def diff(days: int, date_from: str, date_to: str, merged: bool, filter_key: str)
 
     \b
     Examples:
-      cmu diff                       All devices (per-device view)
-      cmu diff --merged              All devices (merged view)
-      cmu diff --key team-key        Specific key
-      cmu diff -d 30                 Last 30 days
+      sburn diff                       All devices (per-device view)
+      sburn diff --merged              All devices (merged view)
+      sburn diff --key team-key        Specific key
+      sburn diff -d 30                 Last 30 days
 
     \b
     Includes: summary, model usage, daily token chart, hourly usage for
@@ -607,15 +622,15 @@ def diff(days: int, date_from: str, date_to: str, merged: bool, filter_key: str)
 
 @main.group(context_settings=CONTEXT_SETTINGS)
 def config():
-    """Configure claude-multi-usage settings.
+    """Configure sandburn settings.
 
     \b
     Examples:
-      cmu config server https://your-server.com
-      cmu config key add my-key "description"
-      cmu config key remove my-key
-      cmu config key list
-      cmu config show
+      sburn config server https://your-server.com
+      sburn config key add my-key "description"
+      sburn config key remove my-key
+      sburn config key list
+      sburn config show
     """
     pass
 
@@ -627,7 +642,7 @@ def config_server(url: str):
 
     \b
     Example:
-      cmu config server https://your-server.com
+      sburn config server https://your-server.com
     """
     from .config import set_server_url
 
@@ -666,8 +681,8 @@ def config_alias(name: str):
 
     \b
     Examples:
-      cmu config alias macbook-air
-      cmu config alias "office desktop"
+      sburn config alias macbook-air
+      sburn config alias "office desktop"
     """
     from .config import set_alias
 
@@ -683,9 +698,9 @@ def config_key(ctx):
 
     \b
     Examples:
-      cmu config key add my-key "description"
-      cmu config key remove my-key
-      cmu config key list
+      sburn config key add my-key "description"
+      sburn config key remove my-key
+      sburn config key list
     """
     if ctx.invoked_subcommand is None:
         ctx.invoke(config_key_list)
@@ -699,8 +714,8 @@ def config_key_add(key: str, description: str):
 
     \b
     Examples:
-      cmu config key add my-key "personal usage"
-      cmu config key add team-key "team shared key"
+      sburn config key add my-key "personal usage"
+      sburn config key add team-key "team shared key"
     """
     from .config import add_key
 
@@ -721,7 +736,7 @@ def config_key_remove(key: str):
 
     \b
     Example:
-      cmu config key remove team-key
+      sburn config key remove team-key
     """
     from .config import remove_key
 
@@ -745,7 +760,7 @@ def config_key_list():
 
     if not keys:
         console.print("[dim]No keys configured.[/dim]")
-        console.print("Run: cmu config key add <your-key>")
+        console.print("Run: sburn config key add <your-key>")
         return
 
     table = Table(box=None, padding=(0, 2))
@@ -776,9 +791,9 @@ def sync(quiet: bool, if_changed: bool):
 
     \b
     Examples:
-      cmu sync
-      cmu sync --quiet
-      cmu sync --if-changed      Skip the upload if nothing changed locally
+      sburn sync
+      sburn sync --quiet
+      sburn sync --if-changed      Skip the upload if nothing changed locally
     """
     from . import autosync
     from .sync_client import SyncError, sync_now
@@ -821,7 +836,7 @@ def import_claude_export(path: str, alias: str, dry_run: bool):
     \b
     Request the export on claude.ai (Settings > Privacy > Export data,
     web or desktop app only), download the ZIP from the emailed link, then:
-      cmu import-claude-export ~/Downloads/data-2026-10-06.zip
+      sburn import-claude-export ~/Downloads/data-2026-10-06.zip
 
     \b
     The export covers every client of the account (web, desktop, Android,
@@ -883,17 +898,17 @@ def autosync_group():
 
     \b
     Installs a per-user scheduler job (a systemd user timer on Linux, a
-    launchd agent on macOS) that runs `cmu autosync run` periodically.
+    launchd agent on macOS) that runs `sburn autosync run` periodically.
     That uploads only when the local usage files changed since the last
     successful sync, so an idle machine never contacts the server.
 
     \b
     Examples:
-      cmu autosync install            Every 15 minutes
-      cmu autosync install --every 5
-      cmu autosync status
-      cmu autosync run                Sync now if anything changed
-      cmu autosync uninstall
+      sburn autosync install            Every 15 minutes
+      sburn autosync install --every 5
+      sburn autosync status
+      sburn autosync run                Sync now if anything changed
+      sburn autosync uninstall
     """
 
 
@@ -980,19 +995,19 @@ def autosync_run(force: bool, quiet: bool):
 
 @main.group("remote", context_settings=CONTEXT_SETTINGS)
 def remote_group():
-    """Install cmu on other machines over SSH.
+    """Install sburn on other machines over SSH.
 
     \b
     Examples:
-      cmu remote install alice@laptop                    Install, configure, schedule
-      cmu remote install laptop --alias laptop --every 5
-      cmu remote install laptop --from git+https://github.com/you/claude-multi-usage.git
-      cmu remote uninstall laptop
+      sburn remote install alice@laptop                    Install, configure, schedule
+      sburn remote install laptop --alias laptop --every 5
+      sburn remote install laptop --from git+https://github.com/mattculler/sandburn.git
+      sburn remote uninstall laptop
 
     \b
-    The remote gets uv (installed into ~/.local/bin if missing), cmu as a
-    uv tool with a ~/.local/bin/cmu command, this machine's server URL and
-    keys, and `cmu autosync install`. Needs bash and curl or wget there;
+    The remote gets uv (installed into ~/.local/bin if missing), sburn as a
+    uv tool with a ~/.local/bin/sburn command, this machine's server URL and
+    keys, and `sburn autosync install`. Needs bash and curl or wget there;
     uv downloads a Python if the host has none that is 3.9 or newer.
     """
 
@@ -1027,7 +1042,7 @@ def remote_group():
     "source",
     default=None,
     metavar="PATH|REQUIREMENT",
-    help="Install cmu from a source checkout (sent over ssh) or a requirement such as "
+    help="Install sburn from a source checkout (sent over ssh) or a requirement such as "
     "git+https://... (default: this checkout when run from one, else the repository URL).",
 )
 @click.option(
@@ -1060,7 +1075,7 @@ def remote_install(
     ssh_options: tuple,
     linger: bool,
 ):
-    """Install cmu and its autosync job on HOST (an ssh destination)."""
+    """Install sburn and its autosync job on HOST (an ssh destination)."""
     import shlex
     import subprocess
     from urllib.parse import urlparse
@@ -1072,7 +1087,7 @@ def remote_install(
     server_url = server_url or get_server_url()
     if not server_url:
         console.print(
-            "[red]No server URL: pass --server or run `cmu config server <url>` here first.[/red]"
+            "[red]No server URL: pass --server or run `sburn config server <url>` here first.[/red]"
         )
         raise SystemExit(1)
     if (urlparse(server_url).hostname or "") in ("localhost", "127.0.0.1", "::1"):
@@ -1085,7 +1100,7 @@ def remote_install(
     ]
     if not keys:
         console.print(
-            "[red]No keys: pass --key or run `cmu config key add <key>` here first.[/red]"
+            "[red]No keys: pass --key or run `sburn config key add <key>` here first.[/red]"
         )
         raise SystemExit(1)
     opts = [o for group in ssh_options for o in shlex.split(group)]
@@ -1129,7 +1144,7 @@ def remote_install(
     help="Extra ssh option, repeatable.",
 )
 def remote_uninstall(host: str, ssh_options: tuple):
-    """Remove cmu and its autosync job from HOST."""
+    """Remove sburn and its autosync job from HOST."""
     import shlex
     import subprocess
 
@@ -1152,7 +1167,7 @@ def remote_uninstall(host: str, ssh_options: tuple):
             )
         raise SystemExit(1) from None
     for line in lines:
-        style = "yellow" if line.startswith("no cmu") else "green"
+        style = "yellow" if line.startswith("no sburn") else "green"
         console.print(f"[{style}]{line}[/{style}]")
 
 
@@ -1169,7 +1184,7 @@ def tree():
 
     \b
     Examples:
-      cmu tree
+      sburn tree
     """
     from datetime import timedelta
 
@@ -1301,7 +1316,7 @@ def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: 
 
     \b
     Requires the [server] extra. deploy/systemd/install.sh installs it on
-    a VM. In a checkout: `uv run --extra server cmu server start
+    a VM. In a checkout: `uv run --extra server sburn server start
     --db-path ./server.db`. For a uv tool install: `uv tool install -e
     '.[server]'` from a checkout, or add `[server]` to the git requirement.
 
@@ -1310,10 +1325,10 @@ def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: 
 
     \b
     Examples:
-      cmu server start
-      cmu server start --host 0.0.0.0 --port 8000
-      cmu server start --db-path ./data/server.db
-      cmu server start --max-body-bytes 500000
+      sburn server start
+      sburn server start --host 0.0.0.0 --port 8000
+      sburn server start --db-path ./data/server.db
+      sburn server start --max-body-bytes 500000
     """
     if action == "start":
         try:
@@ -1322,7 +1337,7 @@ def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: 
             click.echo(
                 "Server dependencies not installed. Install the [server] extra:\n"
                 "  VM:        deploy/systemd/install.sh\n"
-                "  checkout:  uv run --extra server cmu server start --db-path ./server.db\n"
+                "  checkout:  uv run --extra server sburn server start --db-path ./server.db\n"
                 "  uv tool:   uv tool install -e '.[server]'  (or add [server] "
                 "to the git requirement)",
                 err=True,
@@ -1332,12 +1347,12 @@ def server_cmd(action: str, host: str, port: int, db_path: str, max_body_bytes: 
         import os
 
         if db_path:
-            os.environ["CMU_DB_PATH"] = db_path
+            os.environ["SANDBURN_DB_PATH"] = db_path
         if max_body_bytes:
-            os.environ["CMU_MAX_BODY_BYTES"] = str(max_body_bytes)
+            os.environ["SANDBURN_MAX_BODY_BYTES"] = str(max_body_bytes)
 
         uvicorn.run(
-            "claude_multi_usage.server.app:app",
+            "sandburn.server.app:app",
             host=host,
             port=port,
         )
