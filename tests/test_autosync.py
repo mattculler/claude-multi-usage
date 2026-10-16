@@ -13,17 +13,9 @@ from sandburn import autosync, cli, config
 
 @pytest.fixture
 def auto_env(fake_home, monkeypatch):
-    config_dir = fake_home.home / ".sandburn"
-    monkeypatch.setattr(autosync, "CACHE_DIR", config_dir)
-    monkeypatch.setattr(autosync, "STATE_FILE", config_dir / "autosync-state.json")
-    monkeypatch.setattr(autosync, "LOCK_FILE", config_dir / "autosync.lock")
     monkeypatch.setattr(autosync, "systemd_user_dir", lambda: fake_home.home / "systemd-user")
     monkeypatch.setattr(autosync, "launch_agents_dir", lambda: fake_home.home / "LaunchAgents")
-    monkeypatch.setattr(
-        autosync,
-        "_timer_stamp",
-        lambda unit=autosync.SYSTEMD_UNIT: fake_home.home / "timers" / f"stamp-{unit}.timer",
-    )
+    monkeypatch.setenv("XDG_DATA_HOME", str(fake_home.home / "data"))  # the timer stamps
     calls = []
     results = {}
 
@@ -488,3 +480,29 @@ def test_uninstall_launchd_removes_the_pre_rename_agent_too(auto_env, monkeypatc
     assert autosync.uninstall() == [f"removed {old}"]
     assert ["launchctl", "bootout", "gui/501", str(old)] in auto_env.calls
     assert not old.exists()
+
+
+def test_status_reports_the_pre_rename_job(auto_env, monkeypatch):
+    monkeypatch.setattr(autosync, "backend", lambda: "systemd")
+    unit_dir = autosync.systemd_user_dir()
+    unit_dir.mkdir(parents=True)
+    old = unit_dir / "cmu-autosync.timer"
+    old.write_text("[Timer]\n")
+    info = autosync.status()
+    assert not info["installed"] and info["legacy"] == [str(old)]
+    assert any("pre-rename job still installed" in line for line in autosync.describe_status(info))
+    old.unlink()
+    assert autosync.status()["legacy"] == []
+
+
+def test_first_run_notice_mentions_the_pre_rename_job(auto_env):
+    old_dir = auto_env.home / ".claude-multi-usage"
+    old_dir.mkdir()
+    (old_dir / "config.json").write_text("{}")
+    unit_dir = autosync.systemd_user_dir()
+    unit_dir.mkdir(parents=True)
+    (unit_dir / "cmu-autosync.timer").write_text("[Timer]\n")
+    result = CliRunner().invoke(cli.main, ["config", "show"])
+    assert result.exit_code == 0, result.output
+    assert "moved" in result.output
+    assert "pre-rename autosync job is still installed" in result.output

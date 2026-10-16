@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sandburn import cli, config, cost_cache, dashboard, index, parser, pricing, tree
+from sandburn import autosync, cli, config, cost_cache, dashboard, index, parser, pricing, tree
 
 MODEL = "claude-sonnet-4-5-20250929"
 PRICING = {
@@ -84,6 +84,9 @@ def fake_home(tmp_path, monkeypatch):
     monkeypatch.setattr(pricing, "_fetch_litellm_pricing", lambda: None)
     monkeypatch.setattr(config, "CONFIG_DIR", config_dir)
     monkeypatch.setattr(config, "LEGACY_CONFIG_DIR", tmp_path / ".claude-multi-usage")
+    monkeypatch.setattr(autosync, "CACHE_DIR", config_dir)
+    monkeypatch.setattr(autosync, "STATE_FILE", config_dir / "autosync-state.json")
+    monkeypatch.setattr(autosync, "LOCK_FILE", config_dir / "autosync.lock")
     monkeypatch.setattr(config, "CONFIG_FILE", config_dir / "config.json")
     # Rich reads COLUMNS when stdout is not a terminal; keep table cells unwrapped.
     monkeypatch.setenv("COLUMNS", "140")

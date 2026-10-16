@@ -573,9 +573,10 @@ def test_script_removes_a_pre_rename_install(fake_remote, kind):
     assert fake_remote.log("cmu.log") == ""  # the old command is never run
 
 
-def test_script_keeps_a_pre_rename_install_when_the_new_install_fails(fake_remote):
+@pytest.mark.parametrize("kind", ["uv tool", "venv"])
+def test_script_keeps_a_pre_rename_install_when_the_new_install_fails(fake_remote, kind):
     fake_remote.make_uv(fake_remote.bin / "uv")
-    old = fake_remote.install_legacy_tool()
+    old = fake_remote.install_legacy_tool() if kind == "uv tool" else fake_remote.install_venv_era()
     res = fake_remote.run(_install(), FAKE_UV_FAIL="1")
     assert res.returncode != 0 and "install failed" in res.stderr
     assert old.exists()  # the old install still works...
@@ -602,9 +603,11 @@ def test_script_configures_then_schedules(fake_remote):
 def test_uninstall_script_removes_a_uv_tool_install(fake_remote):
     fake_remote.make_uv(fake_remote.bin / "uv")
     assert fake_remote.run(_install()).returncode == 0
+    (fake_remote.home / ".sandburn").mkdir()  # what the first sburn run leaves
     res = fake_remote.run(remote.uninstall_script())
     assert res.returncode == 0, res.stderr
-    assert "removed sburn (uv tool)" in res.stdout and "~/.sandburn" in res.stdout
+    assert "removed sandburn and its autosync job" in res.stdout
+    assert f"kept: the config in {fake_remote.home / '.sandburn'}, and uv" in res.stdout
     assert "sburn autosync uninstall" in fake_remote.log("sburn.log")
     assert "tool uninstall sandburn" in fake_remote.log("uv.log")
     assert not fake_remote.base.exists() and not (fake_remote.bin / "sburn").exists()
@@ -614,9 +617,12 @@ def test_uninstall_script_removes_a_uv_tool_install(fake_remote):
 def test_uninstall_script_removes_a_pre_rename_install(fake_remote, kind):
     fake_remote.make_uv(fake_remote.bin / "uv")
     old = fake_remote.install_legacy_tool() if kind == "uv tool" else fake_remote.install_venv_era()
+    (fake_remote.home / ".claude-multi-usage").mkdir()  # sburn never ran here
     res = fake_remote.run(remote.uninstall_script())
     assert res.returncode == 0, res.stderr
-    assert f"removed sburn (pre-rename {kind}) and its autosync job" in res.stdout
+    assert f"removed claude-multi-usage ({kind}) and its autosync job" in res.stdout
+    assert f"kept: the config in {fake_remote.home / '.claude-multi-usage'}, and uv" in res.stdout
+    assert ".sandburn" not in res.stdout
     assert (
         fake_remote.log("cmu.log") == "cmu autosync uninstall\n"
     )  # the old command removes its job
@@ -630,7 +636,7 @@ def test_uninstall_script_removes_a_pre_rename_install_next_to_the_current_one(f
     old = fake_remote.install_legacy_tool()
     res = fake_remote.run(remote.uninstall_script())
     assert res.returncode == 0, res.stderr
-    assert "removed sburn (uv tool, pre-rename uv tool) and its autosync job" in res.stdout
+    assert "removed sandburn, claude-multi-usage (uv tool) and its autosync job" in res.stdout
     assert "sburn autosync uninstall" in fake_remote.log("sburn.log")
     assert fake_remote.log("cmu.log") == ""  # sburn's uninstall covers the old job too
     assert not old.exists() and not (fake_remote.bin / "cmu").exists()

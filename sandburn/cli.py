@@ -317,9 +317,17 @@ def main(ctx):
 
     moved = config.migrate_legacy_dir()
     if moved:
+        from . import autosync
+
         click.echo(
             f"moved {moved} to {config.CONFIG_DIR} (claude-multi-usage is now sandburn)", err=True
         )
+        if autosync.legacy_job_files():
+            click.echo(
+                "the pre-rename autosync job is still installed and now fails: "
+                "run `sburn autosync install` (or `sburn autosync uninstall`)",
+                err=True,
+            )
     if ctx.invoked_subcommand is None:
         ctx.invoke(dashboard)
 

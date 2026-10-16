@@ -51,6 +51,17 @@ def launch_agents_dir() -> Path:
     return Path.home() / "Library" / "LaunchAgents"
 
 
+def legacy_job_files() -> list[Path]:
+    """Unit or plist files of the job from before the rename that are still around."""
+    unit_dir = systemd_user_dir()
+    candidates = (
+        unit_dir / f"{LEGACY_SYSTEMD_UNIT}.timer",
+        unit_dir / f"{LEGACY_SYSTEMD_UNIT}.service",
+        launch_agents_dir() / f"{LEGACY_LAUNCHD_LABEL}.plist",
+    )
+    return [p for p in candidates if p.exists()]
+
+
 # -- change detection ---------------------------------------------------------
 
 
@@ -236,6 +247,7 @@ def uninstall() -> list[str]:
 def status() -> dict:
     kind = backend()
     info: dict = {"backend": kind, "installed": False, "state": load_state()}
+    info["legacy"] = [str(p) for p in legacy_job_files()]
     if kind == "systemd":
         unit_dir = systemd_user_dir()
         info["installed"] = (unit_dir / f"{SYSTEMD_UNIT}.timer").exists()
@@ -438,6 +450,11 @@ def _uninstall_launchd() -> list[str]:
 
 def describe_status(info: dict) -> list[str]:
     lines = [f"backend:   {info['backend']}", f"installed: {'yes' if info['installed'] else 'no'}"]
+    if info.get("legacy"):
+        lines.append(
+            "pre-rename job still installed (" + ", ".join(info["legacy"]) + "); "
+            "it calls the removed cmu command: run `sburn autosync install` or `uninstall`"
+        )
     if info.get("enabled"):
         lines.append(f"enabled:   {info['enabled']}")
     if info.get("timer"):

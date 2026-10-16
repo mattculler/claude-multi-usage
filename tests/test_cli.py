@@ -1,6 +1,9 @@
+import errno
 import json
 import urllib.request
+from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from sandburn import cli, config
@@ -247,11 +250,35 @@ def test_first_run_moves_the_pre_rename_config_dir(fake_home):
     assert "moved" not in CliRunner().invoke(cli.main, ["config", "show"]).output
 
 
-def test_pre_rename_config_dir_is_left_alone_once_the_new_one_exists(fake_home):
+def test_pre_rename_config_dir_is_left_alone_once_the_new_one_exists(fake_home, monkeypatch):
     old = fake_home.home / ".claude-multi-usage"
     old.mkdir()
     (old / "config.json").write_text(json.dumps({"server_url": "http://old"}))
     config.set_server_url("http://new")
+    monkeypatch.setattr(Path, "rename", lambda *a: pytest.fail("rename attempted"))
     result = CliRunner().invoke(cli.main, ["config", "show"])
     assert result.exit_code == 0 and "moved" not in result.output
     assert old.exists() and config.get_server_url() == "http://new"
+
+
+def test_failed_config_dir_move_is_reported_not_hidden(fake_home, monkeypatch):
+    old = fake_home.home / ".claude-multi-usage"
+    old.mkdir()
+    (old / "config.json").write_text(json.dumps({"server_url": "http://old"}))
+
+    def busy(self, target):
+        raise OSError(errno.EBUSY, "Device or resource busy")  # e.g. a mount point
+
+    monkeypatch.setattr(Path, "rename", busy)
+    result = CliRunner().invoke(cli.main, ["config", "show"])
+    assert result.exit_code == 0, result.output
+    assert "warning: could not move" in result.output and "busy" in result.output
+    assert old.exists() and not config.CONFIG_DIR.exists()
+
+
+def test_unsearchable_home_does_not_break_every_command(fake_home, monkeypatch):
+    def denied(self):
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(Path, "is_dir", denied)
+    assert CliRunner().invoke(cli.main, ["config", "show"]).exit_code == 0

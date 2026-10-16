@@ -102,31 +102,6 @@ fi
 install -d -m 755 "$INSTALL_DIR"
 install -d -m 750 -o "$APP_USER" -g "$APP_USER" "$DATA_DIR"
 
-# An install from before the tool was renamed (cmu-server.service, /opt/cmu,
-# /var/lib/cmu, the "cmu" user): stop it and take over its database.
-LEGACY_UNIT=cmu-server.service
-LEGACY_INSTALL_DIR=/opt/cmu
-LEGACY_DATA_DIR=/var/lib/cmu
-LEGACY_DEFAULTS_FILE=/etc/default/cmu-server
-if [[ -f "/etc/systemd/system/$LEGACY_UNIT" ]]; then
-    echo "==> Retiring $LEGACY_UNIT"
-    systemctl disable --now "$LEGACY_UNIT" 2>/dev/null || true
-    rm -f "/etc/systemd/system/$LEGACY_UNIT"
-    systemctl daemon-reload
-fi
-if [[ -f "$LEGACY_DATA_DIR/server.db" && ! -e "$DATA_DIR/server.db" ]]; then
-    echo "==> Moving the database from $LEGACY_DATA_DIR to $DATA_DIR"
-    for f in "$LEGACY_DATA_DIR/server.db" "$LEGACY_DATA_DIR/server.db-wal" "$LEGACY_DATA_DIR/server.db-shm"; do
-        if [[ -e "$f" ]]; then mv "$f" "$DATA_DIR/"; fi
-    done
-    chown "$APP_USER:$APP_USER" "$DATA_DIR"/server.db*
-fi
-rm -rf "$LEGACY_INSTALL_DIR"
-if [[ -f "$LEGACY_DEFAULTS_FILE" ]] && grep -qE '^[[:space:]]*CMU_' "$LEGACY_DEFAULTS_FILE"; then
-    echo "note: these settings in $LEGACY_DEFAULTS_FILE are not carried over; set them as SANDBURN_* in $DEFAULTS_FILE:"
-    grep -E '^[[:space:]]*CMU_' "$LEGACY_DEFAULTS_FILE" | sed 's/^/      /'
-fi
-
 echo "==> Virtualenv in $VENV (from uv.lock, Python $PYTHON)"
 # The venv is built by root but used by the "sandburn" user, so it must not share
 # files with root's cache (copy, not hardlink) and a downloaded Python must
@@ -158,6 +133,32 @@ case "$(readlink -f "$VENV/bin/python")" in
 esac
 runuser -u "$APP_USER" -- env HOME="$DATA_DIR" "$VENV/bin/sburn" --version >/dev/null \
     || die "the '$APP_USER' user cannot run $VENV/bin/sburn (interpreter: $(readlink -f "$VENV/bin/python")); check the permissions under $INSTALL_DIR"
+
+# The new venv is proven to work, so a server from before the tool was renamed
+# (cmu-server.service, /opt/cmu, /var/lib/cmu, the "cmu" user) can be retired
+# now, and its database taken over before the new service starts.
+LEGACY_UNIT=cmu-server.service
+LEGACY_INSTALL_DIR=/opt/cmu
+LEGACY_DATA_DIR=/var/lib/cmu
+LEGACY_DEFAULTS_FILE=/etc/default/cmu-server
+if [[ -f "/etc/systemd/system/$LEGACY_UNIT" ]]; then
+    echo "==> Retiring $LEGACY_UNIT"
+    systemctl disable --now "$LEGACY_UNIT" 2>/dev/null || true
+    rm -f "/etc/systemd/system/$LEGACY_UNIT"
+    systemctl daemon-reload
+fi
+if [[ -f "$LEGACY_DATA_DIR/server.db" && ! -e "$DATA_DIR/server.db" ]]; then
+    echo "==> Moving the database from $LEGACY_DATA_DIR to $DATA_DIR"
+    for f in "$LEGACY_DATA_DIR"/server.db{,-journal,-wal,-shm}; do
+        if [[ -e "$f" ]]; then mv "$f" "$DATA_DIR/"; fi
+    done
+    chown "$APP_USER:$APP_USER" "$DATA_DIR"/server.db*
+fi
+rm -rf "$LEGACY_INSTALL_DIR"
+if [[ -f "$LEGACY_DEFAULTS_FILE" ]] && grep -qE '^[[:space:]]*CMU_' "$LEGACY_DEFAULTS_FILE"; then
+    echo "note: these settings in $LEGACY_DEFAULTS_FILE are not carried over; set them as SANDBURN_* in $DEFAULTS_FILE:"
+    grep -E '^[[:space:]]*CMU_' "$LEGACY_DEFAULTS_FILE" | sed 's/^/      /'
+fi
 
 echo "==> Settings in $DEFAULTS_FILE"
 if [[ ! -f "$DEFAULTS_FILE" ]]; then

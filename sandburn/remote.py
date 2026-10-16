@@ -233,7 +233,7 @@ if [ -n "$UV" ]; then
     if [ -x "$SBURN" ]; then
         "$SBURN" autosync uninstall || job_left=1
         "$UV" tool uninstall {TOOL_NAME} >/dev/null 2>&1 || true
-        removed="uv tool"
+        removed="{TOOL_NAME}"
     fi
     # From before the rename ({LEGACY_TOOL_NAME}, command cmu). `sburn autosync
     # uninstall` above also removed its job; without sburn the old command must.
@@ -241,13 +241,13 @@ if [ -n "$UV" ]; then
     if [ -x "$CMU" ]; then
         [ -n "$removed" ] || "$CMU" autosync uninstall || job_left=1
         "$UV" tool uninstall {LEGACY_TOOL_NAME} >/dev/null 2>&1 || true
-        removed="${{removed:+$removed, }}pre-rename uv tool"
+        removed="${{removed:+$removed, }}{LEGACY_TOOL_NAME} (uv tool)"
     fi
 fi
 # ...or made by the venv-based installer before that.
 if [ -x "$LEGACY_BASE/venv/bin/cmu" ]; then
     [ -n "$removed" ] || "$LEGACY_BASE/venv/bin/cmu" autosync uninstall || job_left=1
-    removed="${{removed:+$removed, }}pre-rename venv"
+    removed="${{removed:+$removed, }}{LEGACY_TOOL_NAME} (venv)"
 fi
 if [ "$(readlink "$BIN/cmu" 2>/dev/null || true)" = "$LEGACY_BASE/venv/bin/cmu" ]; then
     rm -f "$BIN/cmu"
@@ -258,16 +258,20 @@ if [ -z "$removed" ]; then
     exit {NOTHING_TO_REMOVE}
 fi
 if [ -n "$job_left" ]; then
-    echo "==> $(hostname): removed sburn ($removed); its autosync job could not be removed" >&2
+    echo "==> $(hostname): removed $removed; its autosync job could not be removed" >&2
     echo "    Linux: systemctl --user disable --now {SYSTEMD_UNIT}.timer;" >&2
     echo "           rm ~/.config/systemd/user/{SYSTEMD_UNIT}.*" >&2
     echo "    macOS: launchctl bootout gui/$(id -u)/{LAUNCHD_LABEL};" >&2
     echo "           rm ~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist" >&2
     echo "    (before the rename: {LEGACY_SYSTEMD_UNIT} and {LEGACY_LAUNCHD_LABEL})" >&2
 else
-    echo "==> $(hostname): removed sburn ($removed) and its autosync job"
+    echo "==> $(hostname): removed $removed and its autosync job"
 fi
-echo "    kept: the config in ~/.sandburn and uv"
+kept=""
+for d in ~/.sandburn ~/.claude-multi-usage; do
+    if [ -d "$d" ]; then kept="${{kept:+$kept and }}$d"; fi
+done
+echo "    kept: ${{kept:+the config in $kept, and }}uv"
 """
 
 

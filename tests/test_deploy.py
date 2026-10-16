@@ -32,6 +32,13 @@ def test_install_sh_installs_from_the_lock_and_always_rebuilds_the_project():
 
 def test_install_sh_takes_over_a_pre_rename_server():
     s = SCRIPT.read_text()
-    assert 'systemctl disable --now "$LEGACY_UNIT"' in s and "LEGACY_UNIT=cmu-server.service" in s
+    takeover = s.index("LEGACY_UNIT=cmu-server.service")
+    # only once the new venv is built and proven to run, and before the new service starts
+    assert s.index('runuser -u "$APP_USER"') < takeover < s.index('systemctl restart "$UNIT_NAME"')
+    assert 'systemctl disable --now "$LEGACY_UNIT"' in s
     assert "LEGACY_DATA_DIR=/var/lib/cmu" in s and "LEGACY_INSTALL_DIR=/opt/cmu" in s
+    # the database (with a hot rollback journal, if any) moves only into an empty new location
+    assert 'if [[ -f "$LEGACY_DATA_DIR/server.db" && ! -e "$DATA_DIR/server.db" ]]; then' in s
+    assert "server.db{,-journal,-wal,-shm}" in s
+    assert s.index("server.db{,-journal") < s.index('rm -rf "$LEGACY_INSTALL_DIR"')
     assert "SANDBURN_*" in s  # the settings file is not converted; the user is told

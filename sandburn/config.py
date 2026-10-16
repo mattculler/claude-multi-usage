@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".sandburn"
@@ -29,12 +30,22 @@ def migrate_legacy_dir() -> Path | None:
     happens once ~/.sandburn exists. Returns the old path when it was moved.
     """
     old, new = LEGACY_CONFIG_DIR, CONFIG_DIR
-    # A rename in place only, never a move across the tree.
-    if old.parent != new.parent or not old.is_dir() or new.exists():
+    try:
+        # A rename in place only, never a move across the tree.
+        if old.parent != new.parent or not old.is_dir() or new.exists():
+            return None
+    except OSError:  # the home directory cannot be searched: nothing to do
         return None
     try:
         old.rename(new)
-    except OSError:
+    except FileNotFoundError:  # another sburn process got there first
+        return None
+    except OSError as e:
+        print(
+            f"warning: could not move {old} to {new} ({e.strerror}); "
+            f"sburn reads {new}, move it yourself",
+            file=sys.stderr,
+        )
         return None
     return old
 

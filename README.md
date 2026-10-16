@@ -24,7 +24,7 @@ This tool used to be `claude-multi-usage`, with the command `cmu`. Installing sa
 - **Workstation:** `uv tool install "git+https://github.com/mattculler/sandburn.git"`, then `uv tool uninstall claude-multi-usage`. The first `sburn` run moves `~/.claude-multi-usage` (settings, session index, autosync state) to `~/.sandburn`, and `sburn autosync install` replaces the old `cmu-autosync` timer or `com.claude-multi-usage.autosync` agent, which would otherwise keep calling the removed command.
 - **Other machines:** `sburn remote install HOST` does all of the above on the remote.
 - **Server VM:** `git pull` and `sudo deploy/systemd/install.sh`. It retires `cmu-server.service`, removes `/opt/cmu` and moves the database from `/var/lib/cmu` to `/var/lib/sandburn`. Settings in `/etc/default/cmu-server` are not carried over: the variables are now `SANDBURN_HOST`, `SANDBURN_PORT`, `SANDBURN_DB_PATH` and `SANDBURN_MAX_BODY_BYTES`, in `/etc/default/sandburn-server`. The `cmu` user and the empty `/var/lib/cmu` are left for you to delete.
-- **Docker:** the `/data` volume is unchanged; only the environment variable names changed.
+- **Docker and Kubernetes:** the image still keeps its data in `/data`, but the example names changed. Stop and remove the old `cmu-server` container and keep mounting your existing volume (`-v cmu-data:/data`), or copy it to `sandburn-data`. On Kubernetes the claim is now `sandburn-server-data`: keep `claimName: cmu-server-data` in `deployment.yaml` or move the data over. `CMU_*` environment variables became `SANDBURN_*`.
 
 ## Usage
 
