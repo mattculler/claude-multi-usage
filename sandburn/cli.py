@@ -284,7 +284,7 @@ def _fetch_all_devices(key: str | None = None) -> list[dict]:
 @click.version_option(package_name="sandburn")
 @click.pass_context
 def main(ctx):
-    """Claude Code usage dashboard across multiple devices.
+    """Multi-device usage tracking dashboard for Claude.
 
     \b
     Quick start:
